@@ -18,21 +18,47 @@ const ChartMgr = {
              label: '#131722', crosshair: '#9598a1' };
   },
 
+  /**
+   * 黑白配色 (价格行为学/阿尔·布鲁克斯风格):
+   * 阳线 = 空心(背景色填充 + 深色边框) → 浅色主题下即"白涨"
+   * 阴线 = 实心深色 → "黑跌"
+   * 深色主题下镜像: 阳线空心(深底亮框), 阴线实心亮色
+   */
+  bw() {
+    const t = this.themeColors();
+    const dark = this.theme === 'dark';
+    return {
+      upFill: t.bg, upBorder: t.text, wick: t.text,
+      downFill: t.text, downBorder: t.text,
+      ink: t.text,
+      volUp: dark ? 'rgba(209,212,220,.28)' : 'rgba(19,23,34,.20)',
+      volDown: dark ? 'rgba(209,212,220,.62)' : 'rgba(19,23,34,.55)',
+    };
+  },
+
   colors() {
-    // 色值取 TradingView 默认 (红 #f23645 / 绿 #089981), 涨跌映射按中国习惯可切
-    return this.scheme === 'cn'
-      ? { up: '#f23645', down: '#089981' }
-      : { up: '#089981', down: '#f23645' };
+    const b = this.bw();
+    return { up: b.ink, down: b.ink };      // 成交标记/尺子统一用墨色
   },
 
   volColor(bar) {
-    const c = this.colors();
-    return bar.c >= bar.o ? this.soft(c.up) : this.soft(c.down);
+    const b = this.bw();
+    return bar.c >= bar.o ? b.volUp : b.volDown;
   },
 
   soft(hex) {
     const n = parseInt(hex.slice(1), 16);
     return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},.45)`;
+  },
+
+  /** K线颜色套用(含空心边框), init / 主题切换 / 配色切换都要调 */
+  applyCandleColors() {
+    const b = this.bw();
+    this.candle.applyOptions({
+      upColor: b.upFill, borderUpColor: b.upBorder, wickUpColor: b.wick,
+      downColor: b.downFill, borderDownColor: b.downBorder, wickDownColor: b.wick,
+      borderVisible: true,                 // 空心阳线靠边框成形
+    });
   },
 
   init() {
@@ -65,18 +91,33 @@ const ChartMgr = {
         timeVisible: true, secondsVisible: false,
         rightOffset: 6, barSpacing: 7,
         fixLeftEdge: false, lockVisibleTimeRangeOnResize: true,
+        tickMarkFormatter: (time, type) => {
+          const d = new Date(time * 1000), p = n => String(n).padStart(2, '0');
+          if (type === 0) return String(d.getUTCFullYear());        // 年
+          if (type === 1) return `${d.getUTCMonth() + 1}月`;          // 月
+          if (type === 2) return `${d.getUTCDate()}日`;              // 日
+          return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;     // 时:分(ET)
+        },
       },
       handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
       handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
-      localization: { locale: 'zh-CN' },
+      localization: {
+        locale: 'zh-CN',
+        // 图表时间戳 = "ET 墙钟编码成的假 UTC 秒", 统一用 UTC 方法格式化 => 恒显示美东时间
+        timeFormatter: (t) => {
+          const d = new Date(t * 1000), p = n => String(n).padStart(2, '0');
+          return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
+                 `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+        },
+      },
     });
     this.resize();
 
-    const c = this.colors();
+    const bwc = this.bw();
     this.candle = this.chart.addSeries(LightweightCharts.CandlestickSeries, {
-      upColor: c.up, borderUpColor: c.up, wickUpColor: c.up,
-      downColor: c.down, borderDownColor: c.down, wickDownColor: c.down,
-      borderVisible: false,
+      upColor: bwc.upFill, borderUpColor: bwc.upBorder, wickUpColor: bwc.wick,
+      downColor: bwc.downFill, borderDownColor: bwc.downBorder, wickDownColor: bwc.wick,
+      borderVisible: true,
       priceLineVisible: false, lastValueVisible: false,   // 价格标签由自定义彩色价线提供, 避免双标签
       priceFormat: { type: 'price', precision: 2, minMove: 0.25 },
     }, 0);
@@ -128,6 +169,7 @@ const ChartMgr = {
       rightPriceScale: { borderColor: t.border },
       timeScale: { borderColor: t.border },
     });
+    this.applyCandleColors();
     if (this._lastData && this._lastData.length) {
       this.setData(this._lastData, { preserve: true });
     }
@@ -135,11 +177,7 @@ const ChartMgr = {
 
   setScheme(scheme) {
     this.scheme = scheme;
-    const c = this.colors();
-    this.candle.applyOptions({
-      upColor: c.up, borderUpColor: c.up, wickUpColor: c.up,
-      downColor: c.down, borderDownColor: c.down, wickDownColor: c.down,
-    });
+    this.applyCandleColors();
     if (this._lastData && this._lastData.length) {
       this.setData(this._lastData, { preserve: true });
     }

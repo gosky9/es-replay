@@ -123,14 +123,58 @@ const TF_LABEL = { '1m': '1分钟', '5m': '5分钟', '10m': '10分钟', '15m': '
 /** 浏览器本地时区偏移(秒, 东为正) */
 const TZ_SHIFT = -new Date().getTimezoneOffset() * 60;
 
-/** ET wall → 图表时间(使浏览器本地时区显示出美东墙钟时间) */
-function chartTime(epoch, off) { return epoch + off * 3600 - TZ_SHIFT; }
+/**
+ * ET wall → 图表时间戳 (秒)
+ * 说明: 这里把"美东墙钟"直接编码成 UTC 秒(即假UTC), 再由 chart.js 的
+ * tickMarkFormatter / timeFormatter 全部用 getUTC* 方法格式化。
+ * 这样刻度显示恒为交易所时间(ET), 与用户浏览器时区无关 —— 换台机器也不会偏。
+ */
+function chartTime(epoch, off) { return epoch + off * 3600; }
 
 /** ET 日期字符串 yyyy-mm-dd (用于日线/周线 business day) */
 function etDateStr(epoch, off) {
   const d = new Date((epoch + off * 3600) * 1000);
   const p = n => String(n).padStart(2, '0');
   return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate());
+}
+
+/** ET 墙钟各字段 */
+function etParts(epoch, off) {
+  const d = new Date((epoch + off * 3600) * 1000);
+  return {
+    y: d.getUTCFullYear(), mo: d.getUTCMonth() + 1, d: d.getUTCDate(),
+    hh: d.getUTCHours(), mi: d.getUTCMinutes(),
+  };
+}
+
+/**
+ * CME 交易日键 (ETH 口径): 18:00 ET 起算新的一天
+ * 周日 18:00 → 周一；周五 17:00 后无数据，自然衔接
+ */
+function cmTradingDay(epoch, off) {
+  const p = etParts(epoch, off);
+  const dt = new Date(Date.UTC(p.y, p.mo - 1, p.d));
+  if (p.hh >= 18) dt.setUTCDate(dt.getUTCDate() + 1);
+  const q = n => String(n).padStart(2, '0');
+  return dt.getUTCFullYear() + '-' + q(dt.getUTCMonth() + 1) + '-' + q(dt.getUTCDate());
+}
+
+/** 按回放口径取"交易分组键": RTH=自然日 / ETH=CME 交易日 */
+function dayKeyOf(epoch, off, session) {
+  return session === 'rth' ? etDateStr(epoch, off) : cmTradingDay(epoch, off);
+}
+
+/**
+ * 某根 K 线是当日第几根 (1 起)
+ * RTH 以 09:30 开盘、ETH 以 18:00 开盘为锚, 按周期分钟数折算。
+ * 用于窗口首根落在日内中间时估算序号(窗口内其余 bar 用逐根累加, 更准)
+ */
+function barNoInDay(epoch, off, session, tfMin) {
+  const p = etParts(epoch, off);
+  const mins = p.hh * 60 + p.mi;
+  const open = session === 'rth' ? 570 : 1080;      // 09:30 / 18:00
+  const since = session === 'rth' ? mins - open : (mins - open + 1440) % 1440;
+  return Math.max(1, Math.floor(since / tfMin) + 1);
 }
 
 /** epoch → 美东时间显示串 */

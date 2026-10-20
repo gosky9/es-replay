@@ -149,7 +149,9 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
   background: transparent; border: none; color: var(--text-dim);
   cursor: pointer; border-radius: 6px; padding: 0;
 }
-.tool svg { width: 21px; height: 21px; }
+/* 图标统一 TradingView 手感: 1.5px 线宽 + 圆头圆角 */
+#sideToolbar svg, #drawBar svg { stroke-linecap: round; stroke-linejoin: round; }
+.tool svg { width: 20px; height: 20px; }
 .tool:hover { background: var(--bg-hover); color: var(--text); }
 .tool.active { color: var(--accent); background: var(--bg-hover); }
 .tool-sep { width: 24px; height: 1px; background: var(--border); margin: 5px 0; }
@@ -186,6 +188,28 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
   border: 1px solid var(--accent); border-radius: 4px; outline: none;
   box-shadow: 0 2px 8px rgba(0,0,0,.12);
 }
+
+/* ============ 右键菜单 (突破单) ============ */
+.ctx-menu {
+  position: absolute; z-index: 40; display: none; min-width: 168px;
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.16);
+  padding: 4px; font-size: 12px;
+}
+.ctx-menu .ctx-head {
+  padding: 4px 8px 6px; color: var(--text-dim); font-size: 11px;
+  border-bottom: 1px solid var(--border); margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.ctx-menu button {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  width: 100%; padding: 6px 8px; background: transparent; border: none;
+  color: var(--text); font-size: 12px; font-family: inherit;
+  border-radius: 4px; cursor: pointer; text-align: left;
+}
+.ctx-menu button:hover { background: var(--bg-hover); }
+.ctx-menu button em { font-style: normal; color: var(--text-dim); font-size: 11px; }
+.ctx-menu .ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
 
 /* ============ 图例 (TradingView 左上角) ============ */
 #legend {

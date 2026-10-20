@@ -2,8 +2,8 @@
 const App = {
   engine: null,
   bars: [],               // 当前会话全部K线(含未来)
-  session: 'eth',
-  tf: '1m',
+  session: 'rth',
+  tf: '5m',
   mode: 'random',
   targetEpoch: null,
   CONTEXT_BARS: 400,
@@ -85,6 +85,18 @@ const App = {
     $('sideToolbar').addEventListener('click', onToolClick);
     $('drawBar').addEventListener('click', onToolClick);
     this.syncToolUI();
+
+    /* 右键菜单: 突破单 / 平仓 / 撤销 */
+    $('chartArea').addEventListener('contextmenu', e => this.openContextMenu(e));
+    $('ctxMenu').addEventListener('click', e => {
+      const b = e.target.closest('button[data-act]'); if (!b) return;
+      this.onContextAction(b.dataset.act);
+    });
+    document.addEventListener('mousedown', e => {
+      const m = $('ctxMenu');
+      if (m.style.display === 'block' && !m.contains(e.target)) m.style.display = 'none';
+    }, true);
+    window.addEventListener('blur', () => { $('ctxMenu').style.display = 'none'; });
     $('helpCloseBtn').addEventListener('click', () => { $('helpModal').style.display = 'none'; });
 
     /* 弹窗 */
@@ -132,6 +144,7 @@ const App = {
     document.addEventListener('keydown', e => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
       if (e.key === 'Escape') {
+        if ($('ctxMenu').style.display === 'block') { $('ctxMenu').style.display = 'none'; return; }
         if ($('helpModal').style.display === 'flex') { $('helpModal').style.display = 'none'; return; }
         if (Draw.tool !== 'cursor') {          // 先取消绘图工具, 再退出复盘
           Draw.setTool('cursor'); this.syncToolUI();
@@ -237,13 +250,13 @@ const App = {
     if (barRow) barRow.classList.toggle('hidden-row', !Draw.showBarCount);
   },
 
-  /** 图例两个指标行: EMA 值 / 当前 Bar 序号 */
-  fillIndicators(bar, barIdx) {
+  /** 图例两个指标行: EMA 值 / 当前 bar 的当日序号 */
+  fillIndicators(bar) {
     const $ = id => document.getElementById(id);
     const ema = $('lgEma'), bi = $('lgBarIdx');
     if (ema) ema.textContent = (ChartMgr.emaEnabled && bar && bar.ema != null)
       ? bar.ema.toFixed(2) : '–';
-    if (bi) bi.textContent = (barIdx > 0) ? String(barIdx) : '–';
+    if (bi) bi.textContent = (bar && bar.dayNo > 0) ? String(bar.dayNo) : '–';
   },
 
   toggleTheme() {
@@ -300,8 +313,9 @@ const App = {
     this.session = document.getElementById('modalSession').value;
     this.tf = document.getElementById('modalTf').value;
     this.syncTfUI();
-    // 新会话: 重置交易状态(持仓/流水/标记)
+    // 新会话: 重置交易状态(持仓/流水/标记/挂单/止盈止损)
     Trading.reset();
+    this._limits = []; Trading._pendingLimits = false;
     ChartMgr.setMarkers([]);
     await this.loadAndBuild(true);
   },
@@ -329,17 +343,31 @@ const App = {
       const isDay = (this.tf === '1d' || this.tf === '1w');
       const bars = new Array(n);
       const k = 2 / 21;                     // EMA20 因果计算
+      const tfMin = TF_MINUTES[this.tf] || 1;
       let prev = null;
+      let prevKey = null, dayNo = 0;        // Bar Count: 按当日重置
       for (let i = 0; i < n; i++) {
         const j = w.indices[i];
         const ep = d.time[j], off = d.off[j];
         const c = d.close[j];
         if (prev === null) prev = c;
         else prev = c * k + prev * (1 - k);
+        let dkey, dno;
+        if (isDay) { dkey = 'D' + i; dno = i + 1; }   // 日/周线: 每根独立, 用顺序号
+        else {
+          dkey = dayKeyOf(ep, off, this.session);
+          if (dkey !== prevKey) {
+            const firstOfWindow = prevKey === null;
+            prevKey = dkey;
+            // 窗口首根落在日内中间时, 用"距开盘的时间"估算它是当日第几根
+            dayNo = firstOfWindow ? barNoInDay(ep, off, this.session, tfMin) : 1;
+          } else dayNo++;
+          dno = dayNo;
+        }
         bars[i] = {
           t: isDay ? etDateStr(ep, off) : chartTime(ep, off),
           o: d.open[j], h: d.high[j], l: d.low[j], c, v: d.volume[j],
-          ema: prev, epoch: ep, off,
+          ema: prev, epoch: ep, off, dayNo: dno, dayKey: dkey,
         };
       }
       this.bars = bars;
@@ -354,12 +382,18 @@ const App = {
       if (this.engine) this.engine.destroy();
       this.engine = new ReplayEngine(bars, Math.max(0, w.startIdx));
       this.engine.markStart(Math.max(0, w.startIdx));
+      this._tickIdx = this.engine.idx;      // 用于判断"回退"不重复触发挂单/止损
       this.engine.speed = +document.getElementById('speedSel').value;
       this.engine.onTick = (bar, idx, isNew) => {
+        const backward = this._tickIdx != null && idx <= this._tickIdx;
+        this._tickIdx = idx;
         // 新 bar 追加; 后退/跳转用 setData, 严格保持用户视窗(followLast 仅在贴右端时滚动)
         if (isNew) ChartMgr.appendBar(bar);
         else ChartMgr.setData(this.visibleBars(), { preserve: true, followLast: true });
-        Trading._pendingLimits && this.checkLimits(bar);
+        if (!backward) {
+          if (Trading._pendingLimits) this.checkLimits(bar);
+          this.runTradeChecks(bar);          // 突破单触发 / 止盈止损
+        }
         this.renderReplayBar();
         this.renderTrading();
         this.refreshMarkers();
@@ -434,6 +468,7 @@ const App = {
     if (ep < first - 60 || ep > last + 60) {
       this.targetEpoch = ep;
       Trading.reset();
+      this._limits = []; Trading._pendingLimits = false;
       ChartMgr.setMarkers([]);
       await this.loadAndBuild(false);
       this.toast('已跳转到 ' + raw + ' (新会话, 交易记录已重置)');
@@ -492,6 +527,7 @@ const App = {
           <span class="t-pnl ${t.pnl == null ? '' : t.pnl >= 0 ? 'up' : 'down'}">${t.pnl == null ? '' : (t.pnl >= 0 ? '+' : '') + t.pnl.toFixed(0) + '$'}</span>
         </div>`).join('');
     }
+    if (typeof Draw !== 'undefined' && Draw.render) Draw.render();   // 入场/止盈/止损线跟随持仓
   },
 
   refreshMarkers() {
@@ -553,6 +589,64 @@ const App = {
     this.renderTrading();
   },
 
+  /** 每根 K 线的交易事件: 突破单触发 + 止盈止损 */
+  runTradeChecks(bar) {
+    const evs = Trading.checkBar(bar, bar.epoch, bar.off);
+    for (const ev of evs) {
+      if (ev.type === 'fill') {
+        this.toast(`突破${ev.side === 'buy' ? '买入' : '卖出'}成交 ${ev.qty} 手 @ ${ev.price.toFixed(2)}`);
+        this.addMarker(ev.side, ev.price);
+      } else {
+        const isTp = ev.kind === 'tp';
+        this.toast(`${isTp ? '止盈' : '止损'}触发 @ ${ev.price.toFixed(2)} · 已平仓`);
+        this.addMarker(ev.side, ev.price);
+      }
+    }
+  },
+
+  /* ---------- 右键菜单 (突破单 / 平仓 / 撤销) ---------- */
+  openContextMenu(e) {
+    if (!this.engine) return;
+    const area = document.getElementById('chartArea');
+    const rect = area.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    if (y > Draw._priceAreaHeight()) return;         // 时间轴/成交量区域不处理
+    const raw = Draw.pOf(y);
+    if (raw == null) return;
+    e.preventDefault();
+    const price = Math.round(raw * 4) / 4;           // 对齐 0.25 tick
+    this._ctxPrice = price;
+    const m = document.getElementById('ctxMenu');
+    const cur = this.engine.current;
+    document.getElementById('ctxHead').textContent =
+      `@ ${price.toFixed(2)} · ${etTimeStr(cur.epoch, cur.off).replace(' ET', '')}`;
+    m.style.display = 'block';
+    m.style.left = Math.max(4, Math.min(x, rect.width - m.offsetWidth - 8)) + 'px';
+    m.style.top = Math.max(4, Math.min(y, rect.height - m.offsetHeight - 8)) + 'px';
+  },
+
+  onContextAction(act) {
+    const $ = id => document.getElementById(id);
+    $('ctxMenu').style.display = 'none';
+    const qty = Math.max(1, +$('orderQty').value || 1);
+    const p = this._ctxPrice;
+    if (act === 'buyStop' || act === 'sellStop') {
+      const side = act === 'buyStop' ? 'buy' : 'sell';
+      Trading.placeStop(side, qty, p);
+      Draw.render();
+      this.toast(`${side === 'buy' ? '上破' : '下破'} ${p.toFixed(2)} 挂突破${side === 'buy' ? '买' : '卖'} ${qty} 手 · 拖动该线可改价`);
+    } else if (act === 'close') {
+      this.closePosition();
+    } else if (act === 'clearStops') {
+      const n = Trading.clearStops();
+      Draw.render();
+      this.toast(n ? `已撤销 ${n} 张挂单` : '当前没有挂单');
+    } else if (act === 'clearBrackets') {
+      Trading.tp = null; Trading.sl = null; Trading.save(); Draw.render();
+      this.toast('已清除止盈止损');
+    }
+  },
+
   closePosition() {
     if (!this.engine) return;
     if (Trading.pos === 0) { this.toast('当前无持仓'); return; }
@@ -587,7 +681,7 @@ const App = {
     let idx = -1;
     for (let i = arr.length - 1; i >= 0; i--) { if (arr[i].t === time) { idx = i; break; } }
     const bar = idx >= 0 ? arr[idx] : arr[arr.length - 1];
-    this.fillIndicators(bar, idx >= 0 ? idx + 1 : arr.length);
+    this.fillIndicators(bar);
     if (Trading.pos !== 0) {
       $('lgPos').textContent = `持仓 ${Math.abs(Trading.pos)} 手${Trading.pos > 0 ? '多' : '空'} @ ${Trading.avg.toFixed(2)}`;
     } else $('lgPos').textContent = '';
@@ -600,7 +694,7 @@ const App = {
     const b = this.bars[idx];
     if (!b) return;
     this.setLegend({ open: b.o, high: b.h, low: b.l, close: b.c }, { value: b.v });
-    this.fillIndicators(b, idx + 1);
+    this.fillIndicators(b);
     if (Trading.pos !== 0) {
       $('lgPos').textContent = `持仓 ${Math.abs(Trading.pos)} 手${Trading.pos > 0 ? '多' : '空'} @ ${Trading.avg.toFixed(2)}`;
     } else $('lgPos').textContent = '';

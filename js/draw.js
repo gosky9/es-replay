@@ -141,6 +141,7 @@ const Draw = {
   cancel() {
     this.draft = null;
     this._drag = null;
+    this._dragOrder = null;
     if (!['cursor'].includes(this.tool)) this.setTool('cursor');
     this.render();
   },
@@ -152,8 +153,8 @@ const Draw = {
   },
 
   onDown(e) {
-    if (!App.engine || e.button !== 0) return;
-    if (this.hidden) return;
+    if (!App.engine || this.hidden) return;
+    if (e.button !== 0) return;                    // 右键交给 contextmenu
     const { x, y } = this._pos(e);
     if (x < 0 || y < 0 || x > this.W || y > this.H) return;
     // 只处理主图区域(避开成交量 pane 与时间轴)
@@ -164,6 +165,15 @@ const Draw = {
     if (t == null) return;
 
     if (this.tool === 'cursor') {
+      // 1) 交易线优先: 挂单 / 入场 / 止盈 / 止损 都可以按住拖动
+      const ol = this.hitOrder(y);
+      if (ol) {
+        e.preventDefault(); e.stopPropagation();
+        this._dragOrder = ol.key;
+        this.render();
+        return;
+      }
+      // 2) 已有绘图
       const hit = this.hitTest(x, y);
       if (!hit) {                              // 未命中: 取消选中并放行给图表(十字光标/拖动/缩放)
         if (this.selected != null) { this.selected = null; this.render(); }
@@ -180,7 +190,7 @@ const Draw = {
       return;
     }
 
-    // 绘图工具: 拦截事件
+    // 绘图工具: TradingView 式两次点击 —— 第一次定起点, 移动后第二次点击完成
     e.preventDefault(); e.stopPropagation();
     const p = this.snapPrice(x, y);
     if (p == null) return;
@@ -188,8 +198,89 @@ const Draw = {
     if (this.tool === 'hline') { this.addItem({ type: 'hline', a: { t, p }, b: { t, p } }); this.setTool('cursor'); return; }
     if (this.tool === 'vline') { this.addItem({ type: 'vline', a: { t, p }, b: { t, p } }); this.setTool('cursor'); return; }
     if (this.tool === 'text') { this.startTextInput(x, y, t, p); return; }
-    this.draft = { type: this.tool, a: { t, p }, b: { t, p } };
-    this.render();
+
+    if (!this.draft) {
+      this.draft = { type: this.tool, a: { t, p }, b: { t, p } };
+      this.render();
+      if (typeof App !== 'undefined' && App.toast) App.toast('已定第一点 · 移动鼠标, 再点一下完成 (Esc 取消)');
+      return;
+    }
+    this.draft.b = { t, p };
+    this.finishDraft();
+  },
+
+  /** 第二次点击: 收尾当前草稿 */
+  finishDraft() {
+    const d = this.draft;
+    this.draft = null;
+    if (!d) return;
+    const x1 = this.xOf(d.a.t), x2 = this.xOf(d.b.t);
+    const y1 = this.yOf(d.a.p), y2 = this.yOf(d.b.p);
+    let ok = false;
+    if (x1 != null && x2 != null && y1 != null && y2 != null) {
+      ok = Math.hypot(x2 - x1, y2 - y1) >= this.MIN_DRAW_PX;
+    }
+    if (ok) {
+      // 尺子只保留最新一次测量 (TradingView 的 ruler 也是单实例), 其他类型可累积
+      if (d.type === 'measure') this.items = this.items.filter(i => i.type !== 'measure');
+      this.addItem({ type: d.type, a: d.a, b: d.b, text: d.text });
+    }
+    this.setTool('cursor');      // 画完自动回到光标 (TradingView 行为)
+  },
+
+  onMove(e) {
+    if (!App.engine || this.hidden) return;
+    const { x, y } = this._pos(e);
+
+    if (this.draft) {
+      e.stopPropagation();
+      this.draft.b = { t: this.tOf(x), p: this.snapPrice(x, y) };
+      this.render();
+      return;
+    }
+
+    if (this._dragOrder) {
+      e.stopPropagation(); e.preventDefault();
+      const p = this.snapPrice(x, y);
+      if (p != null) this.applyOrderDrag(this._dragOrder, p);
+      this.render();
+      return;
+    }
+
+    if (this._drag) {
+      e.stopPropagation(); e.preventDefault();
+      const it = this.items.find(i => i.id === this._drag.id);
+      if (!it) return;
+      const t = this.tOf(x), p = this.snapPrice(x, y);
+      const part = this._drag.part;
+
+      if (it.type === 'hline') { it.a.p = p; it.b.p = p; }
+      else if (it.type === 'vline') { it.a.t = t; it.b.t = t; }
+      else if (it.type === 'text') { it.a.t = t; it.a.p = p; }
+      else if (part === 'a') { it.a = { t, p }; }
+      else if (part === 'b') { it.b = { t, p }; }
+      else {  // body: 整体平移
+        const o = this._drag.orig;
+        const dP = p - this.pOf(this._drag.startY);
+        if (it.type === 'trend' || it.type === 'rect' || it.type === 'fib') {
+          it.a = { t: o.a.t, p: o.a.p + dP };
+          it.b = { t: o.b.t, p: o.b.p + dP };
+        }
+      }
+      this.render();
+      return;
+    }
+  },
+
+  onUp(e) {
+    if (this._dragOrder) {
+      this._dragOrder = null;
+      if (typeof Trading !== 'undefined') Trading.save();
+      this.render();
+      return;
+    }
+    if (this._drag) { this._drag = null; this.render(); }
+    // draft 不在 mouseup 结束: 两次点击才完成
   },
 
   /** 文字工具: 在点击位置生成内联输入框 (不用 window.prompt, 更接近 TradingView) */
@@ -221,64 +312,6 @@ const Draw = {
       else if (ev.key === 'Escape') { ev.preventDefault(); commit(false); }
     });
     inp.addEventListener('blur', () => commit(true));
-  },
-
-  onMove(e) {
-    if (!App.engine) return;
-    if (this.hidden) return;
-    const { x, y } = this._pos(e);
-
-    if (this.draft) {
-      e.stopPropagation();
-      this.draft.b = { t: this.tOf(x), p: this.snapPrice(x, y) };
-      this.render();
-      return;
-    }
-
-    if (this._drag) {
-      e.stopPropagation(); e.preventDefault();
-      const it = this.items.find(i => i.id === this._drag.id);
-      if (!it) return;
-      const t = this.tOf(x), p = this.snapPrice(x, y);
-      const part = this._drag.part;
-
-      if (it.type === 'hline') { it.a.p = p; it.b.p = p; }
-      else if (it.type === 'vline') { it.a.t = t; it.b.t = t; }
-      else if (it.type === 'text') { it.a.t = t; it.a.p = p; }
-      else if (part === 'a') { it.a = { t, p }; }
-      else if (part === 'b') { it.b = { t, p }; }
-      else {  // body: 整体平移
-        const o = this._drag.orig;
-        const dP = p - this.pOf(this._drag.startY);
-        if (it.type === 'trend' || it.type === 'rect' || it.type === 'fib') {
-          it.a = { t: o.a.t, p: o.a.p + dP };
-          it.b = { t: o.b.t, p: o.b.p + dP };
-        }
-      }
-      this.render();
-      return;
-    }
-  },
-
-  onUp(e) {
-    if (this.draft) {
-      const d = this.draft;
-      this.draft = null;
-      const x1 = this.xOf(d.a.t), x2 = this.xOf(d.b.t);
-      const y1 = this.yOf(d.a.p), y2 = this.yOf(d.b.p);
-      let ok = false;
-      if (x1 != null && x2 != null && y1 != null && y2 != null) {
-        ok = Math.hypot(x2 - x1, y2 - y1) >= this.MIN_DRAW_PX;
-      }
-      if (ok) {
-        // 尺子只保留最新一次测量 (TradingView 的 ruler 也是单实例), 其他类型可累积
-        if (d.type === 'measure') this.items = this.items.filter(i => i.type !== 'measure');
-        this.addItem({ type: d.type, a: d.a, b: d.b, text: d.text });
-      }
-      this.setTool('cursor');      // 画完自动回到光标 (TradingView 行为)
-      return;
-    }
-    if (this._drag) { this._drag = null; this.render(); }
   },
 
   /** 主图(价格区)底边 y: 取 pane0 真实高度, 避免在成交量 pane 上画 */
@@ -351,13 +384,83 @@ const Draw = {
     if (!App.engine) return;
 
     if (this.showBarCount) this.drawBarNumbers(ctx);
+    this.drawOrderLines(ctx);          // 交易线不受"隐藏绘图"影响
     if (this.hidden) return;
 
     for (const it of this.items) this.drawItem(ctx, it, it.id === this.selected);
     if (this.draft) this.drawItem(ctx, this.draft, false, true);
   },
 
-  /** Bar Count 指标: 橙色序号 (稀疏显示, 随缩放自适应) */
+  /* ---------- 交易线: 挂单 / 入场 / 止盈 / 止损 (均可拖动) ---------- */
+  orderLines() {
+    const out = [];
+    if (typeof Trading === 'undefined') return out;
+    for (const s of (Trading.stops || [])) {
+      out.push({
+        key: 'stop:' + s.id, price: s.price, kind: 'stop',
+        label: (s.side === 'buy' ? '突破买 ' : '突破卖 ') + s.qty + '手',
+      });
+    }
+    if (Trading.pos !== 0) {
+      out.push({ key: 'entry', price: Trading.avg, kind: 'entry', label: '入场 ' + Trading.avg.toFixed(2) });
+      if (Trading.tp != null) out.push({ key: 'tp', price: Trading.tp, kind: 'tp', label: '止盈 ' + Trading.tp.toFixed(2) });
+      if (Trading.sl != null) out.push({ key: 'sl', price: Trading.sl, kind: 'sl', label: '止损 ' + Trading.sl.toFixed(2) });
+    }
+    return out;
+  },
+
+  hitOrder(y) {
+    for (const o of this.orderLines()) {
+      const yy = this.yOf(o.price);
+      if (yy != null && Math.abs(y - yy) <= 5) return o;
+    }
+    return null;
+  },
+
+  applyOrderDrag(key, price) {
+    price = Math.round(price * 4) / 4;                 // 对齐 0.25 tick
+    if (key.indexOf('stop:') === 0) {
+      const id = +key.slice(5);
+      const s = (Trading.stops || []).find(s => s.id === id);
+      if (s) s.price = price;
+    } else if (key === 'tp') Trading.tp = price;
+    else if (key === 'sl') Trading.sl = price;
+  },
+
+  drawOrderLines(ctx) {
+    const list = this.orderLines();
+    if (!list.length) return;
+    const t = ChartMgr.themeColors();
+    for (const o of list) {
+      const y = this.yOf(o.price);
+      if (y == null) continue;
+      ctx.save();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = t.text;
+      ctx.globalAlpha = o.kind === 'entry' ? 0.9 : 0.66;
+      ctx.setLineDash(o.kind === 'entry' ? [] : o.kind === 'stop' ? [6, 4]
+                     : o.kind === 'tp' ? [2, 3] : [8, 3]);
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(this.W, y); ctx.stroke();
+      ctx.restore();
+
+      // 左侧标签牌 (拖动提示)
+      ctx.save();
+      ctx.font = '11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+      const w = ctx.measureText(o.label).width + 12;
+      ctx.globalAlpha = 0.92;
+      ctx.fillStyle = t.text;
+      ctx.fillRect(6, y - 8, w, 16);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = t.bg;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(o.label, 12, y);
+      ctx.restore();
+    }
+  },
+
+  /** Bar Count 指标: 当日序号 (RTH 按自然日 / ETH 按 CME 交易日, 每日首根=1)
+     *  默认每 2 根显示一次(2/4/6…, 1/3/5 不显示), 缩得太小时再成倍稀疏
+     */
   drawBarNumbers(ctx) {
     const bars = ChartMgr._lastData;
     if (!bars || !bars.length) return;
@@ -368,26 +471,26 @@ const Draw = {
     if (to < from) return;
     let spacing = 7;
     try { spacing = ChartMgr.chart.timeScale().options().barSpacing || 7; } catch (e) {}
-    // 9px 的字号至少要 ~14px 间距才不糊, 按缩放稀疏显示
-    const step = spacing >= 20 ? 1 : spacing >= 12 ? 2 : spacing >= 8 ? 4 : spacing >= 5 ? 8 : 12;
+    const every = spacing >= 5 ? 2 : spacing >= 3.5 ? 4 : 8;
 
     const yMax = this._priceAreaHeight();
     const bg = ChartMgr.themeColors().bg;
     ctx.save();
-    ctx.font = '500 9px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+    ctx.font = '500 8px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.lineJoin = 'round';
     ctx.lineWidth = 3;
     ctx.strokeStyle = bg;                  // 主题色描边, 数字压在 K 线上也能看清
-    ctx.fillStyle = this.BAR_IDX_COLOR;
+    ctx.fillStyle = this.alpha(ChartMgr.themeColors().text, 0.74);   // 黑白盘面用墨色, 不引入额外色相
     for (let i = from; i <= to; i += 1) {
-      if (i % step !== 0 && i !== to) continue;
       const b = bars[i];
+      const n = b && b.dayNo ? b.dayNo : 0;
+      if (!n || n % every !== 0) continue;
       const x = this.xOf(b.t);
       const yl = this.yOf(b.l);
       if (x == null || yl == null || yl > yMax - 12) continue;
-      const s = String(i + 1);
+      const s = String(n);
       ctx.strokeText(s, x, yl + 5);
       ctx.fillText(s, x, yl + 5);
     }
@@ -490,13 +593,14 @@ const Draw = {
       const x0 = Math.min(ax, bx), y0 = Math.min(ay, by);
       const w = Math.abs(bx - ax), h = Math.abs(by - ay);
       const up = it.b.p >= it.a.p;
-      const pal = ChartMgr.colors();                   // 跟随红涨绿跌的全局配色
+      const pal = ChartMgr.colors();                   // 黑白盘面下即墨色
       const rc = up ? pal.up : pal.down;
-      ctx.fillStyle = this.alpha(rc, 0.12);
+      ctx.fillStyle = this.alpha(rc, 0.07);
       ctx.fillRect(x0, y0, w, h);
       ctx.strokeStyle = rc;
-      ctx.setLineDash([]);
+      ctx.setLineDash([4, 3]);
       ctx.strokeRect(x0, y0, w, h);
+      ctx.setLineDash([]);
       const dP = it.b.p - it.a.p;
       const pct = it.a.p ? dP / it.a.p * 100 : 0;
       const bars = this._barsBetween(it.a.t, it.b.t);

@@ -14,15 +14,15 @@
   <div class="tb-left">
     <div class="symbol-block" id="symbolBlock" title="点击选择复盘起点">
       <span class="sym-name">ES1!</span>
-      <span class="sym-meta" id="symMeta">· 1m · CME</span>
+      <span class="sym-meta" id="symMeta">· 5m · CME</span>
       <svg class="chev" viewBox="0 0 8 5"><path d="M0 0l4 5 4-5z"/></svg>
     </div>
 
     <div class="tb-sep"></div>
 
     <div class="tf-group" id="tfGroup">
-      <button data-tf="1m" class="active">1m</button>
-      <button data-tf="5m">5m</button>
+      <button data-tf="1m">1m</button>
+      <button data-tf="5m" class="active">5m</button>
       <button data-tf="15m">15m</button>
       <button data-tf="30m">30m</button>
       <button data-tf="1h">1H</button>
@@ -46,8 +46,8 @@
     <div class="tb-sep"></div>
 
     <div class="seg" id="sessionSeg">
-      <button data-session="eth" class="active">ETH</button>
-      <button data-session="rth">RTH</button>
+      <button data-session="eth">ETH</button>
+      <button data-session="rth" class="active">RTH</button>
     </div>
   </div>
 
@@ -67,100 +67,100 @@
 
   <!-- 左侧竖排工具栏 (TradingView 布局: 绘图工具 + 视图工具) -->
   <aside id="sideToolbar">
-    <button data-tool="cursor" class="tool active" title="光标 (1)">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M14 4v20M4 14h20"/><circle cx="14" cy="14" r="2.6"/></g></svg>
+    <button data-tool="cursor" class="tool active" title="光标 (Esc)">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M14 3.5v6.5M14 18v6.5M3.5 14H10M18 14h6.5"/></g><circle cx="14" cy="14" r="1.4" fill="currentColor"/></svg>
     </button>
     <div class="tool-sep"></div>
-    <button data-tool="trend" class="tool" title="趋势线 (2)">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M6 21L22 7"/><circle cx="6" cy="21" r="1.8"/><circle cx="22" cy="7" r="1.8"/></g></svg>
+    <button data-tool="trend" class="tool" title="趋势线">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M7 21L21 7"/><circle cx="7" cy="21" r="2"/><circle cx="21" cy="7" r="2"/></g></svg>
     </button>
-    <button data-tool="hline" class="tool" title="水平线 (3)">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M4 14h20"/><circle cx="14" cy="14" r="1.8"/></g></svg>
+    <button data-tool="hline" class="tool" title="水平线">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M3.5 14h21"/></g><circle cx="14" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
     </button>
-    <button data-tool="vline" class="tool" title="垂直线 (4)">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M14 4v20"/><circle cx="14" cy="14" r="1.8"/></g></svg>
+    <button data-tool="vline" class="tool" title="垂直线">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M14 3.5v21"/></g><circle cx="14" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
     </button>
-    <button data-tool="rect" class="tool" title="矩形 (5)">
-      <svg viewBox="0 0 28 28"><rect x="5" y="8" width="18" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+    <button data-tool="rect" class="tool" title="矩形">
+      <svg viewBox="0 0 28 28"><rect x="4.5" y="7.5" width="19" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
     </button>
-    <button data-tool="fib" class="tool" title="斐波那契回撤 (6)">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M4 7h20M4 11.7h20M4 16.3h20M4 21h20"/></g></svg>
+    <button data-tool="fib" class="tool" title="斐波那契回撤">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6.5 21.5L21.5 6.5" opacity=".5"/><path d="M3.5 7h17M3.5 11.7h14.5M3.5 16.3h12M3.5 21h9.5"/></g></svg>
     </button>
-    <button data-tool="text" class="tool" title="文字 (7)">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.8" fill="none"><path d="M6 7h16M14 7v15"/></g></svg>
+    <button data-tool="text" class="tool" title="文字">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 7.5h16M14 7.5V21"/></g></svg>
     </button>
-    <button data-tool="measure" class="tool" title="测量 / 尺子 (8)">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><rect x="4" y="11" width="20" height="7" rx="1"/><path d="M9 11v3M14 11v4M19 11v3"/></g></svg>
+    <button data-tool="measure" class="tool" title="测量 / 尺子">
+      <svg viewBox="0 0 28 28"><g transform="rotate(-45 14 14)" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="4.5" y="10.5" width="19" height="7" rx="1.2"/><path d="M9 10.5v3M13 10.5v4M17 10.5v3"/></g></svg>
     </button>
     <div class="tool-sep"></div>
     <button data-tool="magnet" class="tool" title="磁吸 (吸附到开高低收)">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M8 6v8a6 6 0 0012 0V6"/><path d="M8 6h4M16 6h4"/></g></svg>
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M8.5 6v8.5a5.5 5.5 0 0011 0V6"/><path d="M8.5 6h4M15.5 6h4"/></g></svg>
     </button>
     <button data-tool="hide" class="tool" title="隐藏 / 显示所有绘图">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M3 14s4-6 11-6 11 6 11 6-4 6-11 6S3 14 3 14z"/><circle cx="14" cy="14" r="2.8"/></g></svg>
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M2.5 14S6.5 7.5 14 7.5 25.5 14 25.5 14 21.5 20.5 14 20.5 2.5 14 2.5 14z"/><circle cx="14" cy="14" r="3"/></g></svg>
     </button>
     <button data-tool="trash" class="tool" title="删除所有绘图">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M6 8h16M11 8V5h6v3M8 8l1 15h10l1-15"/></g></svg>
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M5.5 8h17M11 8V5.5h6V8M7.5 8l1 15.5h11L20.5 8"/><path d="M12 11.5v8M16 11.5v8"/></g></svg>
     </button>
     <div class="tool-sep"></div>
     <button data-tool="fit" class="tool" title="重置缩放 (显示最近 180 根)">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M4 10V4h6M24 10V4h-6M4 18v6h6M24 18v6h-6"/></g></svg>
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M10 4.5H4.5V10M18 4.5h5.5V10M10 23.5H4.5V18M18 23.5h5.5V18"/></g></svg>
     </button>
     <button data-tool="fitall" class="tool" title="显示全部已播放 K 线">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M4 14h20M8 9l-4 5 4 5M20 9l4 5-4 5"/></g></svg>
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M4 14h20M8.5 9.5L4 14l4.5 4.5M19.5 9.5L24 14l-4.5 4.5"/></g></svg>
     </button>
     <button data-tool="shot" class="tool" title="保存图表截图">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><rect x="3.5" y="8.5" width="21" height="15" rx="2"/><circle cx="14" cy="16" r="4"/><path d="M10 8.5l1.6-3h4.8l1.6 3"/></g></svg>
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3.5" y="8.5" width="21" height="14.5" rx="2.5"/><circle cx="14" cy="15.5" r="4"/><path d="M10 8.5l1.5-3h5l1.5 3"/></g></svg>
     </button>
     <button data-tool="clean" class="tool" title="清除成交标记与交易记录">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M5 21h18M9 18l9-11 5 4-9 11z"/></g></svg>
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M4.5 21.5h19M8.5 18.5l9.5-12 5.5 4.5-9.5 12z"/></g></svg>
     </button>
     <div class="tool-sep"></div>
     <button data-tool="help" class="tool" title="快捷键说明">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><circle cx="14" cy="14" r="10"/><path d="M11.5 11a2.5 2.5 0 115 0c0 1.8-2.5 2-2.5 4"/><circle cx="14" cy="19.5" r="1" fill="currentColor"/></g></svg>
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><circle cx="14" cy="14" r="10"/><path d="M11.2 11.2a2.8 2.8 0 115.6 0c0 2-2.8 2.2-2.8 4.4"/></g><circle cx="14" cy="19.6" r="1.1" fill="currentColor"/></svg>
     </button>
   </aside>
 
   <section id="chartWrap">
     <!-- 收藏的绘图工具横条 (TradingView 顶部工具栏) -->
     <div id="drawBar">
-      <button data-tool="cursor" class="dbtn active" title="光标">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M14 4v20M4 14h20"/><circle cx="14" cy="14" r="2.4"/></g></svg>
+      <button data-tool="cursor" class="dbtn active" title="光标 (Esc)">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M14 3.5v6.5M14 18v6.5M3.5 14H10M18 14h6.5"/></g><circle cx="14" cy="14" r="1.4" fill="currentColor"/></svg>
       </button>
       <button data-tool="trend" class="dbtn" title="趋势线">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M6 21L22 7"/><circle cx="6" cy="21" r="1.7"/><circle cx="22" cy="7" r="1.7"/></g></svg>
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M7 21L21 7"/><circle cx="7" cy="21" r="2"/><circle cx="21" cy="7" r="2"/></g></svg>
       </button>
       <button data-tool="hline" class="dbtn" title="水平线">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M4 14h20"/><circle cx="14" cy="14" r="1.7"/></g></svg>
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M3.5 14h21"/></g><circle cx="14" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
       </button>
       <button data-tool="vline" class="dbtn" title="垂直线">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M14 4v20"/><circle cx="14" cy="14" r="1.7"/></g></svg>
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M14 3.5v21"/></g><circle cx="14" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
       </button>
       <button data-tool="rect" class="dbtn" title="矩形">
-        <svg viewBox="0 0 28 28"><rect x="5" y="8" width="18" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+        <svg viewBox="0 0 28 28"><rect x="4.5" y="7.5" width="19" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
       </button>
       <button data-tool="fib" class="dbtn" title="斐波那契回撤">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M4 7h20M4 11.7h20M4 16.3h20M4 21h20"/></g></svg>
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6.5 21.5L21.5 6.5" opacity=".5"/><path d="M3.5 7h17M3.5 11.7h14.5M3.5 16.3h12M3.5 21h9.5"/></g></svg>
       </button>
       <button data-tool="text" class="dbtn" title="文字">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.8" fill="none"><path d="M6 7h16M14 7v15"/></g></svg>
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 7.5h16M14 7.5V21"/></g></svg>
       </button>
       <button data-tool="measure" class="dbtn" title="测量 (尺子)">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><rect x="4" y="11" width="20" height="7" rx="1"/><path d="M9 11v3M14 11v4M19 11v3"/></g></svg>
+        <svg viewBox="0 0 28 28"><g transform="rotate(-45 14 14)" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="4.5" y="10.5" width="19" height="7" rx="1.2"/><path d="M9 10.5v3M13 10.5v4M17 10.5v3"/></g></svg>
       </button>
       <div class="dsep"></div>
       <button data-tool="magnet" class="dbtn" title="磁吸">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M8 6v8a6 6 0 0012 0V6"/><path d="M8 6h4M16 6h4"/></g></svg>
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M8.5 6v8.5a5.5 5.5 0 0011 0V6"/><path d="M8.5 6h4M15.5 6h4"/></g></svg>
       </button>
       <button data-tool="hide" class="dbtn" title="隐藏/显示所有绘图">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M3 14s4-6 11-6 11 6 11 6-4 6-11 6S3 14 3 14z"/><circle cx="14" cy="14" r="2.8"/></g></svg>
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M2.5 14S6.5 7.5 14 7.5 25.5 14 25.5 14 21.5 20.5 14 20.5 2.5 14 2.5 14z"/><circle cx="14" cy="14" r="3"/></g></svg>
       </button>
       <button data-tool="trash" class="dbtn" title="删除所有绘图">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M6 8h16M11 8V5h6v3M8 8l1 15h10l1-15"/></g></svg>
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M5.5 8h17M11 8V5.5h6V8M7.5 8l1 15.5h11L20.5 8"/><path d="M12 11.5v8M16 11.5v8"/></g></svg>
       </button>
       <div class="dsep"></div>
-      <button data-tool="barcount" class="dbtn active" title="Bar Count 序号显示">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 20V9M11 20v-6M16 20v-9M21 20v-4"/></g></svg>
+      <button data-tool="barcount" class="dbtn active" title="Bar Count (当日序号, 每 2 根显示)">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M4 20h20"/><path d="M8.5 6.5v9M14 6.5v9M19.5 6.5v4"/></g></svg>
       </button>
     </div>
 
@@ -193,6 +193,17 @@
         <div class="lg-row lg-ind" id="lgBarRow">
           <span><b>Bar Count</b><i id="lgBarIdx">–</i></span>
         </div>
+      </div>
+
+      <!-- 右键菜单 (价格行为学的突破单入口) -->
+      <div id="ctxMenu" class="ctx-menu">
+        <div class="ctx-head" id="ctxHead">--</div>
+        <button data-act="buyStop"><span>挂突破买单</span><em>上破触发</em></button>
+        <button data-act="sellStop"><span>挂突破卖单</span><em>下破触发</em></button>
+        <div class="ctx-sep"></div>
+        <button data-act="close"><span>市价平仓</span><em>C</em></button>
+        <button data-act="clearStops"><span>撤销全部挂单</span></button>
+        <button data-act="clearBrackets"><span>清除止盈止损</span></button>
       </div>
 
       <!-- ============ 悬浮回放控制条 (TradingView Bar Replay 样式) ============ -->
@@ -337,7 +348,7 @@
       <div class="date-inputs">
         <select id="modalTf" class="sel">
           <option value="1m">1分钟</option>
-          <option value="5m">5分钟</option>
+          <option value="5m" selected>5分钟</option>
           <option value="10m">10分钟</option>
           <option value="15m">15分钟</option>
           <option value="30m">30分钟</option>
@@ -349,7 +360,7 @@
         </select>
         <select id="modalSession" class="sel">
           <option value="eth">ETH 全日 (23小时)</option>
-          <option value="rth">RTH 美股时段 (9:30-16:00)</option>
+          <option value="rth" selected>RTH 美股时段 (9:30-16:00)</option>
         </select>
       </div>
     </div>
