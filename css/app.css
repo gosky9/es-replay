@@ -1,0 +1,382 @@
+/* ============ ES 复盘练习 · TradingView 风格 (浅色默认 / 深色可切) ============ */
+:root {
+  /* TradingView 浅色主题 */
+  --bg:        #ffffff;
+  --bg-panel:  #ffffff;
+  --bg-hover:  #f0f3fa;
+  --bg-sunken: #f8f9fd;
+  --border:    #e0e3eb;
+  --border-strong: #d1d4dc;
+  --text:      #131722;
+  --text-dim:  #787b86;
+  --accent:    #2962ff;
+  --up:        #f23645;   /* 涨=红 (中国习惯; 色值取 TradingView) */
+  --down:      #089981;   /* 跌=绿 */
+  --up-soft:   rgba(242,54,69,.10);
+  --down-soft: rgba(8,153,129,.10);
+  --warn:      #f7b731;
+  --shadow:    0 2px 10px rgba(19,23,34,.14);
+  --shadow-lg: 0 12px 48px rgba(19,23,34,.28);
+  --rb-bg:     #ffffff;
+}
+/* 绿涨红跌方案 */
+body[data-scheme="us"] {
+  --up:   #089981;
+  --down: #f23645;
+  --up-soft:   rgba(8,153,129,.10);
+  --down-soft: rgba(242,54,69,.10);
+}
+/* TradingView 深色主题 */
+body[data-theme="dark"] {
+  --bg:        #131722;
+  --bg-panel:  #1e222d;
+  --bg-hover:  #2a2e39;
+  --bg-sunken: #171b26;
+  --border:    #2a2e39;
+  --border-strong: #363a45;
+  --text:      #d1d4dc;
+  --text-dim:  #787b86;
+  --shadow:    0 2px 10px rgba(0,0,0,.4);
+  --shadow-lg: 0 12px 48px rgba(0,0,0,.5);
+  --rb-bg:     #1e222d;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  display: flex; flex-direction: column;
+  transition: background .15s, color .15s;
+}
+button, select, input { font-family: inherit; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ============ 顶栏 (TradingView) ============ */
+#topbar {
+  height: 48px; flex: none; display: flex; align-items: center;
+  justify-content: space-between; padding: 0 10px;
+  background: var(--bg-panel); border-bottom: 1px solid var(--border);
+}
+.tb-left, .tb-right { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.tb-sep { width: 1px; height: 22px; background: var(--border); margin: 0 6px; flex: none; }
+
+.symbol-block {
+  display: flex; align-items: baseline; gap: 5px; cursor: pointer;
+  padding: 5px 8px; border-radius: 4px; white-space: nowrap;
+}
+.symbol-block:hover { background: var(--bg-hover); }
+.sym-name { font-weight: 700; font-size: 15px; color: var(--text); letter-spacing: .2px; }
+.sym-meta { font-size: 12px; color: var(--text-dim); }
+.symbol-block .chev { width: 8px; height: 5px; fill: var(--text-dim); margin-left: 2px; align-self: center; }
+
+.tf-group { display: flex; align-items: center; gap: 1px; }
+.tf-group button {
+  background: transparent; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 12px; font-weight: 500; padding: 5px 8px; border-radius: 4px; line-height: 1;
+}
+.tf-group button:hover { background: var(--bg-hover); color: var(--text); }
+.tf-group button.active { background: var(--bg-hover); color: var(--text); font-weight: 600; }
+.tf-more {
+  background: transparent; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 12px; padding: 4px 2px; margin-left: 2px; outline: none;
+  appearance: none; -webkit-appearance: none; width: 18px; text-align: center;
+}
+
+.tv-txt-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: transparent; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 12px; padding: 6px 8px; border-radius: 4px; line-height: 1;
+}
+.tv-txt-btn:hover { background: var(--bg-hover); color: var(--text); }
+.tv-txt-btn.active { color: var(--accent); }
+.fx-icon { width: 15px; height: 15px; }
+
+.tv-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; background: transparent; border: none;
+  color: var(--text-dim); cursor: pointer; border-radius: 4px; padding: 0;
+}
+.tv-icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+.tv-icon-btn svg { width: 19px; height: 19px; }
+.ic-moon { display: none; }
+body[data-theme="dark"] .ic-sun { display: none; }
+body[data-theme="dark"] .ic-moon { display: block; }
+
+.tv-buy-btn, .tv-sell-btn, .tv-outline-btn {
+  border: none; border-radius: 4px; color: #fff; cursor: pointer;
+  font-size: 12px; font-weight: 600; padding: 7px 14px; line-height: 1;
+}
+.tv-buy-btn { background: #2962ff; }
+.tv-sell-btn { background: var(--border-strong); color: var(--text); }
+.tv-buy-btn:hover { filter: brightness(1.08); }
+.tv-sell-btn:hover { filter: brightness(.95); }
+body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
+.tv-outline-btn {
+  background: transparent; color: var(--text);
+  border: 1px solid var(--border-strong); font-weight: 500;
+}
+.tv-outline-btn:hover { background: var(--bg-hover); }
+
+.sel {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer; outline: none;
+}
+.sel:hover { border-color: var(--border-strong); }
+.sel-sm { padding: 2px 6px; }
+.seg { display: inline-flex; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.seg button {
+  background: transparent; color: var(--text-dim); border: none;
+  padding: 4px 10px; font-size: 12px; cursor: pointer;
+}
+.seg button.active { background: var(--accent); color: #fff; }
+.seg-sm button { padding: 4px 10px; font-size: 12px; }
+
+/* ============ 主区布局 ============ */
+#main { flex: 1; display: flex; min-height: 0; }
+
+/* 左侧竖排工具栏 */
+#sideToolbar {
+  width: 52px; flex: none; background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; align-items: center;
+  padding: 6px 0; gap: 2px;
+}
+.tool {
+  width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; color: var(--text-dim);
+  cursor: pointer; border-radius: 6px; padding: 0;
+}
+.tool svg { width: 21px; height: 21px; }
+.tool:hover { background: var(--bg-hover); color: var(--text); }
+.tool.active { color: var(--accent); background: var(--bg-hover); }
+.tool-sep { width: 24px; height: 1px; background: var(--border); margin: 5px 0; }
+
+#chartWrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+/* ============ 收藏绘图工具横条 (TradingView 顶部工具栏) ============ */
+#drawBar {
+  height: 36px; flex: none; display: flex; align-items: center; gap: 2px;
+  padding: 0 8px; background: var(--bg-panel); border-bottom: 1px solid var(--border);
+  overflow-x: auto; overflow-y: hidden;
+}
+.dbtn {
+  width: 30px; height: 28px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; color: var(--text-dim);
+  cursor: pointer; border-radius: 4px; padding: 0;
+}
+.dbtn svg { width: 20px; height: 20px; }
+.dbtn:hover { background: var(--bg-hover); color: var(--text); }
+.dbtn.active { background: var(--accent); color: #fff; }
+.dbtn.active:hover { filter: brightness(1.08); }
+.dsep { width: 1px; height: 16px; background: var(--border); margin: 0 5px; flex: none; }
+
+/* 图表区 (相对定位容器) */
+#chartArea { flex: 1; position: relative; min-height: 0; }
+#chartMain { position: absolute; inset: 0; }
+#drawLayer { position: absolute; inset: 0; pointer-events: none; z-index: 11; }
+/* 文字工具的内联输入框 */
+.draw-text-input {
+  position: absolute; z-index: 30; width: 150px; height: 24px;
+  padding: 0 6px; font-size: 12px; font-family: inherit;
+  color: var(--text); background: var(--bg-panel);
+  border: 1px solid var(--accent); border-radius: 4px; outline: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,.12);
+}
+
+/* ============ 图例 (TradingView 左上角) ============ */
+#legend {
+  position: absolute; top: 8px; left: 12px; z-index: 12;
+  display: flex; flex-direction: column; gap: 1px;
+  font-size: 12px; pointer-events: none; line-height: 1.35;
+}
+.lg-row { display: flex; align-items: baseline; gap: 8px; }
+.lg-sym { font-weight: 700; font-size: 14px; color: var(--text); }
+.lg-tf { color: var(--text-dim); font-size: 12px; }
+.lg-exch { color: var(--text-dim); font-size: 11px; }
+.lg-ohlc { color: var(--text-dim); gap: 10px; }
+.lg-ohlc b { font-weight: 400; color: var(--text-dim); margin-right: 2px; }
+.lg-ohlc i { font-style: normal; color: var(--text); font-variant-numeric: tabular-nums; }
+#lgChg { font-weight: 600; font-variant-numeric: tabular-nums; }
+.lg-vol { color: var(--text-dim); }
+.lg-vol b { color: var(--text); font-weight: 400; }
+.lg-pos { color: var(--accent); font-weight: 600; }
+.lg-ind { color: var(--text-dim); font-size: 11px; }
+.lg-ind b { color: var(--text-dim); font-weight: 400; margin-right: 4px; }
+.lg-ind i { font-style: normal; color: var(--text); font-variant-numeric: tabular-nums; }
+.lg-ind.hidden-row { display: none; }
+
+/* ============ 悬浮回放控制条 (Bar Replay) ============ */
+#replayBar {
+  position: absolute; bottom: 38px; left: 50%; transform: translateX(-50%);
+  z-index: 20; background: var(--rb-bg); border: 1px solid var(--border);
+  border-radius: 22px; box-shadow: var(--shadow); overflow: hidden;
+  transition: opacity .18s, transform .18s;
+  max-width: calc(100% - 24px);
+}
+#replayBar.hidden { opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(8px); }
+.rb-progress {
+  position: absolute; top: 0; left: 0; right: 0; height: 2px; background: transparent;
+}
+.rb-progress i {
+  display: block; height: 100%; width: 0;
+  background: var(--accent); border-radius: 0 1px 1px 0; transition: width .12s linear;
+}
+.rb-row { display: flex; align-items: center; gap: 2px; padding: 5px 8px; }
+.rb-group { display: flex; align-items: center; gap: 2px; }
+.rb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 6px; flex: none; }
+
+.rb-icon {
+  width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; color: var(--text); cursor: pointer;
+  border-radius: 50%; padding: 0;
+}
+.rb-icon svg { width: 16px; height: 16px; }
+.rb-icon:hover { background: var(--bg-hover); }
+.rb-play { color: var(--accent); }
+.rb-play:hover { background: var(--accent); color: #fff; }
+.rb-play .ic-pause { display: none; }
+#replayBar.playing .rb-play .ic-play { display: none; }
+#replayBar.playing .rb-play .ic-pause { display: block; }
+
+.rb-label { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+.rb-sel {
+  background: transparent; border: none; color: var(--text); font-size: 12px;
+  cursor: pointer; outline: none; padding: 3px 2px; font-weight: 500;
+}
+.rb-goto input {
+  width: 118px; background: var(--bg-sunken); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--text); font-size: 12px;
+  padding: 4px 7px; outline: none; font-variant-numeric: tabular-nums; flex: none;
+}
+.rb-goto input:focus { border-color: var(--accent); }
+.rb-txt {
+  background: transparent; border: none; color: var(--accent); font-size: 12px;
+  cursor: pointer; padding: 4px 6px; border-radius: 4px; font-weight: 500;
+  white-space: nowrap; flex: none;
+}
+.rb-txt:hover { background: var(--bg-hover); }
+.rb-count { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+.rb-count b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.rb-time {
+  color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums;
+  white-space: nowrap; margin-left: 8px;
+}
+
+/* ============ 右侧交易面板 ============ */
+#sidePanel {
+  width: 288px; flex: none; border-left: 1px solid var(--border);
+  background: var(--bg-panel); display: flex; flex-direction: column; overflow-y: auto;
+}
+.panel { padding: 12px; border-bottom: 1px solid var(--border); }
+.panel-grow { flex: 1; min-height: 180px; display: flex; flex-direction: column; }
+.panel-title { font-size: 12px; font-weight: 600; color: var(--text-dim); margin-bottom: 10px; }
+.panel-title-sub { font-weight: 400; }
+.order-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.order-row label { color: var(--text-dim); font-size: 12px; flex: none; }
+.order-row .qty-label { margin-left: 4px; }
+.order-row input[type=number] {
+  width: 100%; min-width: 0; background: var(--bg-sunken); border: 1px solid var(--border);
+  color: var(--text); border-radius: 4px; padding: 5px 8px; font-size: 12px; outline: none;
+}
+.order-row input:disabled { opacity: .4; }
+.order-row input:focus { border-color: var(--accent); }
+#dirSeg, #typeSeg { flex: 1; }
+#dirSeg button, #typeSeg button { flex: 1; }
+.btn-buy, .btn-sell {
+  flex: 1; border: none; border-radius: 4px; padding: 7px 0; font-size: 13px;
+  font-weight: 600; color: #fff; cursor: pointer;
+}
+.btn-buy { background: var(--up); }
+.btn-sell { background: var(--down); }
+.btn-buy:hover, .btn-sell:hover { filter: brightness(1.08); }
+.btn-close {
+  flex: 1; background: var(--bg-sunken); border: 1px solid var(--border);
+  color: var(--text); border-radius: 4px; padding: 7px 0; font-size: 13px; cursor: pointer;
+}
+.btn-close:hover { background: var(--bg-hover); }
+.btn-ghost {
+  background: transparent; color: var(--text-dim); border: 1px solid var(--border);
+  border-radius: 4px; padding: 5px 10px; font-size: 12px; cursor: pointer;
+}
+.btn-ghost:hover { color: var(--text); border-color: var(--border-strong); }
+.kbd { font-size: 10px; opacity: .55; font-weight: 400; }
+.order-hint { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.stat { display: flex; flex-direction: column; }
+.stat-k { font-size: 11px; color: var(--text-dim); }
+.stat-v { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat-v.up { color: var(--up); }
+.stat-v.down { color: var(--down); }
+
+.trade-list { flex: 1; overflow-y: auto; font-size: 12px; }
+.trade-item {
+  display: flex; justify-content: space-between; gap: 6px; padding: 6px 8px;
+  border-radius: 4px; margin-bottom: 4px; background: var(--bg-sunken);
+}
+.trade-item .t-time { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.trade-item .t-side.buy { color: var(--up); font-weight: 600; }
+.trade-item .t-side.sell { color: var(--down); font-weight: 600; }
+.trade-item .t-pnl { font-variant-numeric: tabular-nums; }
+.trade-item .t-pnl.up { color: var(--up); }
+.trade-item .t-pnl.down { color: var(--down); }
+.trade-empty { color: var(--text-dim); text-align: center; padding: 24px 0; font-size: 12px; }
+
+/* ============ 弹窗 ============ */
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(19,23,34,.42);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+  backdrop-filter: blur(2px);
+}
+.modal {
+  width: 420px; background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 24px; box-shadow: var(--shadow-lg);
+}
+.modal-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+.modal-sub { font-size: 12px; color: var(--text-dim); margin-bottom: 20px; }
+.modal-row { margin-bottom: 16px; }
+.modal-label { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.modal-note { font-size: 12px; color: var(--text); }
+.date-inputs { display: flex; gap: 8px; }
+.date-inputs input, .date-inputs select {
+  flex: 1; background: var(--bg-sunken); border: 1px solid var(--border); color: var(--text);
+  border-radius: 4px; padding: 7px 10px; font-size: 13px; outline: none;
+}
+.btn-big {
+  width: 100%; background: var(--accent); color: #fff; border: none; border-radius: 6px;
+  padding: 11px 0; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 4px;
+}
+.btn-big:hover { filter: brightness(1.08); }
+.modal-foot { margin-top: 14px; font-size: 11px; color: var(--text-dim); text-align: center; line-height: 1.7; }
+.modal-loading { display: flex; flex-direction: column; align-items: center; gap: 14px; width: 220px; }
+.spinner {
+  width: 34px; height: 34px; border: 3px solid var(--border);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#loadingText { color: var(--text-dim); font-size: 13px; }
+
+/* 帮助浮层 */
+.help-table { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+.help-table > div { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.help-table kbd {
+  display: inline-block; min-width: 52px; text-align: center;
+  background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 4px;
+  padding: 3px 6px; font-size: 12px; font-family: inherit; color: var(--text);
+}
+.help-table span { color: var(--text-dim); }
+
+/* ============ Toast ============ */
+.toast {
+  position: fixed; top: 58px; left: 50%; transform: translateX(-50%);
+  background: var(--bg-panel); border: 1px solid var(--border); color: var(--text);
+  padding: 9px 18px; border-radius: 6px; font-size: 13px; z-index: 200;
+  opacity: 0; pointer-events: none; transition: opacity .25s; box-shadow: var(--shadow);
+}
+.toast.show { opacity: 1; }
+.toast.warn { border-color: var(--warn); }

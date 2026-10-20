@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ES1! · 1分钟 · CME</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body data-theme="light">
+
+<!-- ============ 顶栏 (TradingView 布局) ============ -->
+<header id="topbar">
+  <div class="tb-left">
+    <div class="symbol-block" id="symbolBlock" title="点击选择复盘起点">
+      <span class="sym-name">ES1!</span>
+      <span class="sym-meta" id="symMeta">· 1m · CME</span>
+      <svg class="chev" viewBox="0 0 8 5"><path d="M0 0l4 5 4-5z"/></svg>
+    </div>
+
+    <div class="tb-sep"></div>
+
+    <div class="tf-group" id="tfGroup">
+      <button data-tf="1m" class="active">1m</button>
+      <button data-tf="5m">5m</button>
+      <button data-tf="15m">15m</button>
+      <button data-tf="30m">30m</button>
+      <button data-tf="1h">1H</button>
+      <button data-tf="4h">4H</button>
+      <button data-tf="1d">1D</button>
+      <button data-tf="1w">1W</button>
+      <select id="tfMore" class="tf-more" title="更多周期">
+        <option value="">▾</option>
+        <option value="10m">10分钟</option>
+        <option value="12h">12小时</option>
+      </select>
+    </div>
+
+    <div class="tb-sep"></div>
+
+    <button id="indicatorBtn" class="tv-txt-btn active" title="EMA20 (指数移动平均)">
+      <svg class="fx-icon" viewBox="0 0 28 28"><path d="M6 20c4-6 6-10 9-10s4 5 7 5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      <span>指标</span>
+    </button>
+
+    <div class="tb-sep"></div>
+
+    <div class="seg" id="sessionSeg">
+      <button data-session="eth" class="active">ETH</button>
+      <button data-session="rth">RTH</button>
+    </div>
+  </div>
+
+  <div class="tb-right">
+    <button id="themeBtn" class="tv-icon-btn" title="切换浅色/深色主题">
+      <svg viewBox="0 0 28 28" class="ic-sun"><circle cx="14" cy="14" r="5" fill="currentColor"/><g stroke="currentColor" stroke-width="1.8"><path d="M14 3v3M14 22v3M3 14h3M22 14h3M6.2 6.2l2.1 2.1M19.7 19.7l2.1 2.1M21.8 6.2l-2.1 2.1M8.3 19.7l-2.1 2.1"/></g></svg>
+      <svg viewBox="0 0 28 28" class="ic-moon"><path d="M20 17A8.5 8.5 0 019.5 6.5a8.5 8.5 0 100 15A8.5 8.5 0 0020 17z" fill="currentColor"/></svg>
+    </button>
+    <button id="randomBtn" class="tv-buy-btn" title="随机一段开始复盘">随机复盘</button>
+    <button id="customBtn" class="tv-outline-btn" title="自选日期开始复盘">自选复盘</button>
+    <button id="exitBtn" class="tv-txt-btn" title="停止本地服务器并退出">退出</button>
+  </div>
+</header>
+
+<!-- ============ 主区 ============ -->
+<main id="main">
+
+  <!-- 左侧竖排工具栏 (TradingView 布局: 绘图工具 + 视图工具) -->
+  <aside id="sideToolbar">
+    <button data-tool="cursor" class="tool active" title="光标 (1)">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M14 4v20M4 14h20"/><circle cx="14" cy="14" r="2.6"/></g></svg>
+    </button>
+    <div class="tool-sep"></div>
+    <button data-tool="trend" class="tool" title="趋势线 (2)">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M6 21L22 7"/><circle cx="6" cy="21" r="1.8"/><circle cx="22" cy="7" r="1.8"/></g></svg>
+    </button>
+    <button data-tool="hline" class="tool" title="水平线 (3)">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M4 14h20"/><circle cx="14" cy="14" r="1.8"/></g></svg>
+    </button>
+    <button data-tool="vline" class="tool" title="垂直线 (4)">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M14 4v20"/><circle cx="14" cy="14" r="1.8"/></g></svg>
+    </button>
+    <button data-tool="rect" class="tool" title="矩形 (5)">
+      <svg viewBox="0 0 28 28"><rect x="5" y="8" width="18" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+    </button>
+    <button data-tool="fib" class="tool" title="斐波那契回撤 (6)">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M4 7h20M4 11.7h20M4 16.3h20M4 21h20"/></g></svg>
+    </button>
+    <button data-tool="text" class="tool" title="文字 (7)">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.8" fill="none"><path d="M6 7h16M14 7v15"/></g></svg>
+    </button>
+    <button data-tool="measure" class="tool" title="测量 / 尺子 (8)">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><rect x="4" y="11" width="20" height="7" rx="1"/><path d="M9 11v3M14 11v4M19 11v3"/></g></svg>
+    </button>
+    <div class="tool-sep"></div>
+    <button data-tool="magnet" class="tool" title="磁吸 (吸附到开高低收)">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M8 6v8a6 6 0 0012 0V6"/><path d="M8 6h4M16 6h4"/></g></svg>
+    </button>
+    <button data-tool="hide" class="tool" title="隐藏 / 显示所有绘图">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M3 14s4-6 11-6 11 6 11 6-4 6-11 6S3 14 3 14z"/><circle cx="14" cy="14" r="2.8"/></g></svg>
+    </button>
+    <button data-tool="trash" class="tool" title="删除所有绘图">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M6 8h16M11 8V5h6v3M8 8l1 15h10l1-15"/></g></svg>
+    </button>
+    <div class="tool-sep"></div>
+    <button data-tool="fit" class="tool" title="重置缩放 (显示最近 180 根)">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M4 10V4h6M24 10V4h-6M4 18v6h6M24 18v6h-6"/></g></svg>
+    </button>
+    <button data-tool="fitall" class="tool" title="显示全部已播放 K 线">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M4 14h20M8 9l-4 5 4 5M20 9l4 5-4 5"/></g></svg>
+    </button>
+    <button data-tool="shot" class="tool" title="保存图表截图">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><rect x="3.5" y="8.5" width="21" height="15" rx="2"/><circle cx="14" cy="16" r="4"/><path d="M10 8.5l1.6-3h4.8l1.6 3"/></g></svg>
+    </button>
+    <button data-tool="clean" class="tool" title="清除成交标记与交易记录">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M5 21h18M9 18l9-11 5 4-9 11z"/></g></svg>
+    </button>
+    <div class="tool-sep"></div>
+    <button data-tool="help" class="tool" title="快捷键说明">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><circle cx="14" cy="14" r="10"/><path d="M11.5 11a2.5 2.5 0 115 0c0 1.8-2.5 2-2.5 4"/><circle cx="14" cy="19.5" r="1" fill="currentColor"/></g></svg>
+    </button>
+  </aside>
+
+  <section id="chartWrap">
+    <!-- 收藏的绘图工具横条 (TradingView 顶部工具栏) -->
+    <div id="drawBar">
+      <button data-tool="cursor" class="dbtn active" title="光标">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M14 4v20M4 14h20"/><circle cx="14" cy="14" r="2.4"/></g></svg>
+      </button>
+      <button data-tool="trend" class="dbtn" title="趋势线">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M6 21L22 7"/><circle cx="6" cy="21" r="1.7"/><circle cx="22" cy="7" r="1.7"/></g></svg>
+      </button>
+      <button data-tool="hline" class="dbtn" title="水平线">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M4 14h20"/><circle cx="14" cy="14" r="1.7"/></g></svg>
+      </button>
+      <button data-tool="vline" class="dbtn" title="垂直线">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M14 4v20"/><circle cx="14" cy="14" r="1.7"/></g></svg>
+      </button>
+      <button data-tool="rect" class="dbtn" title="矩形">
+        <svg viewBox="0 0 28 28"><rect x="5" y="8" width="18" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      </button>
+      <button data-tool="fib" class="dbtn" title="斐波那契回撤">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M4 7h20M4 11.7h20M4 16.3h20M4 21h20"/></g></svg>
+      </button>
+      <button data-tool="text" class="dbtn" title="文字">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.8" fill="none"><path d="M6 7h16M14 7v15"/></g></svg>
+      </button>
+      <button data-tool="measure" class="dbtn" title="测量 (尺子)">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><rect x="4" y="11" width="20" height="7" rx="1"/><path d="M9 11v3M14 11v4M19 11v3"/></g></svg>
+      </button>
+      <div class="dsep"></div>
+      <button data-tool="magnet" class="dbtn" title="磁吸">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M8 6v8a6 6 0 0012 0V6"/><path d="M8 6h4M16 6h4"/></g></svg>
+      </button>
+      <button data-tool="hide" class="dbtn" title="隐藏/显示所有绘图">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M3 14s4-6 11-6 11 6 11 6-4 6-11 6S3 14 3 14z"/><circle cx="14" cy="14" r="2.8"/></g></svg>
+      </button>
+      <button data-tool="trash" class="dbtn" title="删除所有绘图">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.6" fill="none"><path d="M6 8h16M11 8V5h6v3M8 8l1 15h10l1-15"/></g></svg>
+      </button>
+      <div class="dsep"></div>
+      <button data-tool="barcount" class="dbtn active" title="Bar Count 序号显示">
+        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 20V9M11 20v-6M16 20v-9M21 20v-4"/></g></svg>
+      </button>
+    </div>
+
+    <!-- 图表区 (相对定位容器: 图表 / 绘图层 / 图例 / 回放条) -->
+    <div id="chartArea">
+      <div id="chartMain"></div>
+      <canvas id="drawLayer"></canvas>
+
+      <!-- TradingView 风格图例 -->
+      <div id="legend">
+        <div class="lg-row">
+          <span class="lg-sym">ES1!</span>
+          <span class="lg-tf" id="lgTf">1m</span>
+          <span class="lg-exch">CME</span>
+        </div>
+        <div class="lg-row lg-ohlc">
+          <span><b>O</b><i id="lgO">–</i></span>
+          <span><b>H</b><i id="lgH">–</i></span>
+          <span><b>L</b><i id="lgL">–</i></span>
+          <span><b>C</b><i id="lgC">–</i></span>
+          <span id="lgChg"></span>
+        </div>
+        <div class="lg-row lg-ohlc">
+          <span class="lg-vol" id="lgVol"></span>
+          <span class="lg-pos" id="lgPos"></span>
+        </div>
+        <div class="lg-row lg-ind" id="lgEmaRow">
+          <span><b>EMA</b><i id="lgEma">–</i></span>
+        </div>
+        <div class="lg-row lg-ind" id="lgBarRow">
+          <span><b>Bar Count</b><i id="lgBarIdx">–</i></span>
+        </div>
+      </div>
+
+      <!-- ============ 悬浮回放控制条 (TradingView Bar Replay 样式) ============ -->
+      <div id="replayBar" class="hidden">
+        <div class="rb-progress"><i id="rbProgressFill"></i></div>
+        <div class="rb-row">
+          <div class="rb-group">
+            <button id="btnRestart" class="rb-icon" title="回到起点 (R)">
+              <svg viewBox="0 0 28 28"><path d="M7 6v16M22 7L11 14l11 7z" fill="currentColor"/></svg>
+            </button>
+            <button id="btnStepBack" class="rb-icon" title="上一根 (←)">
+              <svg viewBox="0 0 28 28"><path d="M21 7L10 14l11 7z" fill="currentColor"/></svg>
+            </button>
+            <button id="btnPlay" class="rb-icon rb-play" title="播放/暂停 (空格)">
+              <svg viewBox="0 0 28 28" class="ic-play"><path d="M9 5l15 9-15 9z" fill="currentColor"/></svg>
+              <svg viewBox="0 0 28 28" class="ic-pause"><path d="M9 5h4v18H9zM16 5h4v18h-4z" fill="currentColor"/></svg>
+            </button>
+            <button id="btnStepFwd" class="rb-icon" title="下一根 (→)">
+              <svg viewBox="0 0 28 28"><path d="M7 7l11 7-11 7z" fill="currentColor"/></svg>
+            </button>
+            <button id="btnEnd" class="rb-icon" title="跳到数据末尾 (Jump to realtime)">
+              <svg viewBox="0 0 28 28"><path d="M7 7l11 7-11 7z" fill="currentColor"/><path d="M21 6v16" stroke="currentColor" stroke-width="2.4"/></svg>
+            </button>
+          </div>
+
+          <span class="rb-sep"></span>
+
+          <div class="rb-group">
+            <label class="rb-label">Speed</label>
+            <select id="speedSel" class="rb-sel">
+              <option value="0.5">0.5x</option>
+              <option value="1">1x</option>
+              <option value="2" selected>2x</option>
+              <option value="3">3x</option>
+              <option value="5">5x</option>
+              <option value="10">10x</option>
+              <option value="30">30x</option>
+              <option value="60">60x</option>
+            </select>
+          </div>
+
+          <span class="rb-sep"></span>
+
+          <div class="rb-group rb-goto">
+            <label class="rb-label">Go to</label>
+            <input id="gotoInput" type="text" placeholder="2024-03-15 09:35" spellcheck="false">
+            <button id="gotoBtn" class="rb-txt" title="跳转到该美东时间">跳转</button>
+          </div>
+
+          <span class="rb-sep"></span>
+
+          <div class="rb-group">
+            <span class="rb-count">Bar count <b id="barCount">0</b></span>
+            <span class="rb-time" id="replayTime">--</span>
+          </div>
+
+          <span class="rb-sep"></span>
+
+          <button id="btnCloseReplay" class="rb-icon" title="结束本次复盘 (Esc)">
+            <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 8l12 12M20 8L8 20"/></g></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 右侧交易面板 ============ -->
+  <aside id="sidePanel">
+    <div class="panel">
+      <div class="panel-title">下单</div>
+      <div class="order-row">
+        <div class="seg seg-sm" id="dirSeg">
+          <button data-dir="buy" class="active">买入/做多</button>
+          <button data-dir="sell">卖出/做空</button>
+        </div>
+      </div>
+      <div class="order-row">
+        <div class="seg seg-sm" id="typeSeg">
+          <button data-type="market" class="active">市价</button>
+          <button data-type="limit">限价</button>
+        </div>
+      </div>
+      <div class="order-row">
+        <label>限价</label>
+        <input id="limitPrice" type="number" step="0.25" disabled>
+        <label class="qty-label">手数</label>
+        <input id="orderQty" type="number" value="1" min="1" step="1">
+      </div>
+      <div class="order-row">
+        <button id="btnBuy" class="btn-buy">买入 <span class="kbd">B</span></button>
+        <button id="btnSell" class="btn-sell">卖出 <span class="kbd">S</span></button>
+      </div>
+      <div class="order-row">
+        <button id="btnClose" class="btn-close">市价平仓 <span class="kbd">C</span></button>
+      </div>
+      <div class="order-hint" id="orderHint">ES 1手 = $50/点 · 成交价为当时K线收盘价</div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">持仓与盈亏</div>
+      <div class="stat-grid">
+        <div class="stat"><span class="stat-k">持仓</span><span class="stat-v" id="stPos">0 手</span></div>
+        <div class="stat"><span class="stat-k">均价</span><span class="stat-v" id="stAvg">-</span></div>
+        <div class="stat"><span class="stat-k">浮动盈亏</span><span class="stat-v" id="stFloat">-</span></div>
+        <div class="stat"><span class="stat-k">已实现盈亏</span><span class="stat-v" id="stReal">-</span></div>
+        <div class="stat"><span class="stat-k">合计盈亏</span><span class="stat-v" id="stTotal">-</span></div>
+        <div class="stat"><span class="stat-k">交易/胜率</span><span class="stat-v" id="stWin">0 / -</span></div>
+      </div>
+      <div class="order-row">
+        <button id="btnResetTrades" class="btn-ghost">清空交易记录</button>
+      </div>
+    </div>
+
+    <div class="panel panel-grow">
+      <div class="panel-title">交易记录 <span class="panel-title-sub" id="tradeCount">(0)</span></div>
+      <div id="tradeList" class="trade-list"></div>
+    </div>
+  </aside>
+</main>
+
+<!-- ============ 开始弹窗 ============ -->
+<div id="startModal" class="modal-mask">
+  <div class="modal">
+    <div class="modal-title">ES 复盘练习</div>
+    <div class="modal-sub">CME E-mini S&P 500 · 1分钟数据 · 加法向后复权连续序列</div>
+    <div class="modal-row">
+      <div class="modal-label">复盘模式</div>
+      <div class="seg" id="modeSeg">
+        <button data-mode="random" class="active">随机一段</button>
+        <button data-mode="custom">自选日期</button>
+      </div>
+    </div>
+    <div class="modal-row" id="customDateRow" style="display:none">
+      <div class="modal-label">开始时间 <span class="modal-note">(美东时间 ET)</span></div>
+      <div class="date-inputs">
+        <input type="date" id="startDate" value="2024-03-15">
+        <input type="time" id="startTime" value="09:35">
+      </div>
+    </div>
+    <div class="modal-row">
+      <div class="modal-label">周期 / 时段</div>
+      <div class="date-inputs">
+        <select id="modalTf" class="sel">
+          <option value="1m">1分钟</option>
+          <option value="5m">5分钟</option>
+          <option value="10m">10分钟</option>
+          <option value="15m">15分钟</option>
+          <option value="30m">30分钟</option>
+          <option value="1h">1小时</option>
+          <option value="4h">4小时</option>
+          <option value="12h">12小时</option>
+          <option value="1d">日线</option>
+          <option value="1w">周线</option>
+        </select>
+        <select id="modalSession" class="sel">
+          <option value="eth">ETH 全日 (23小时)</option>
+          <option value="rth">RTH 美股时段 (9:30-16:00)</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-row">
+      <div class="modal-label">数据范围</div>
+      <div class="modal-note" id="dataRangeNote">加载中…</div>
+    </div>
+    <button id="startBtn" class="btn-big">开始复盘</button>
+    <div class="modal-foot">快捷键: 空格 播放/暂停 · ←/→ 步进 · R 重置 · B 买入 · S 卖出 · C 平仓 · Esc 结束复盘</div>
+  </div>
+</div>
+
+<!-- 帮助浮层 -->
+<div id="helpModal" class="modal-mask" style="display:none">
+  <div class="modal">
+    <div class="modal-title">快捷键</div>
+    <div class="help-table">
+      <div><kbd>空格</kbd><span>播放 / 暂停</span></div>
+      <div><kbd>←</kbd><span>上一根 K 线</span></div>
+      <div><kbd>→</kbd><span>下一根 K 线</span></div>
+      <div><kbd>R</kbd><span>回到起点</span></div>
+      <div><kbd>B</kbd><span>市价买入</span></div>
+      <div><kbd>S</kbd><span>市价卖出</span></div>
+      <div><kbd>C</kbd><span>市价平仓</span></div>
+      <div><kbd>Esc</kbd><span>结束本次复盘</span></div>
+    </div>
+    <button id="helpCloseBtn" class="btn-big">知道了</button>
+  </div>
+</div>
+
+<div id="loadingMask" class="modal-mask" style="display:none">
+  <div class="modal modal-loading">
+    <div class="spinner"></div>
+    <div id="loadingText">加载数据…</div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="vendor/lightweight-charts.standalone.production.js"></script>
+<script src="js/data.js"></script>
+<script src="js/chart.js"></script>
+<script src="js/draw.js"></script>
+<script src="js/replay.js"></script>
+<script src="js/trading.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,304 @@
+/* ============ chart.js — lightweight-charts v5 封装 (TradingView 风格) ============ */
+const ChartMgr = {
+  chart: null, candle: null, vol: null, ema: null, volPane: null, markersPlugin: null,
+  priceLine: null, posLine: null,
+  markers: [],
+  emaEnabled: true,
+  tf: '1m',
+  theme: 'light',
+  scheme: 'cn',                       // cn=红涨绿跌, us=绿涨红跌
+
+  /** 当前主题的图表配色 (TradingView light / dark) */
+  themeColors() {
+    if (this.theme === 'dark') {
+      return { bg: '#131722', text: '#d1d4dc', grid: '#2a2e39', border: '#2a2e39',
+               label: '#363a45', crosshair: '#758696' };
+    }
+    return { bg: '#ffffff', text: '#131722', grid: '#e0e3eb', border: '#e0e3eb',
+             label: '#131722', crosshair: '#9598a1' };
+  },
+
+  colors() {
+    // 色值取 TradingView 默认 (红 #f23645 / 绿 #089981), 涨跌映射按中国习惯可切
+    return this.scheme === 'cn'
+      ? { up: '#f23645', down: '#089981' }
+      : { up: '#089981', down: '#f23645' };
+  },
+
+  volColor(bar) {
+    const c = this.colors();
+    return bar.c >= bar.o ? this.soft(c.up) : this.soft(c.down);
+  },
+
+  soft(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},.45)`;
+  },
+
+  init() {
+    const el = document.getElementById('chartMain');
+    const t = this.themeColors();
+    this.chart = LightweightCharts.createChart(el, {
+      layout: {
+        background: { type: 'solid', color: t.bg },
+        textColor: t.text,
+        fontSize: 11,
+        attributionLogo: false,          // 去掉左下角 TradingView logo
+      },
+      grid: {
+        // 用户要求: 干净背景, 不要网格线
+        vertLines: { visible: false },
+        horzLines: { visible: false },
+      },
+      crosshair: {
+        mode: LightweightCharts.CrosshairMode.Normal,
+        vertLine: { color: t.crosshair, width: 1, style: LightweightCharts.LineStyle.Dashed, labelBackgroundColor: t.label },
+        horzLine: { color: t.crosshair, width: 1, style: LightweightCharts.LineStyle.Dashed, labelBackgroundColor: t.label },
+      },
+      rightPriceScale: {
+        borderColor: t.border,
+        scaleMargins: { top: 0.06, bottom: 0.06 },
+        entireTextOnly: true,
+      },
+      timeScale: {
+        borderColor: t.border,
+        timeVisible: true, secondsVisible: false,
+        rightOffset: 6, barSpacing: 7,
+        fixLeftEdge: false, lockVisibleTimeRangeOnResize: true,
+      },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+      handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
+      localization: { locale: 'zh-CN' },
+    });
+    this.resize();
+
+    const c = this.colors();
+    this.candle = this.chart.addSeries(LightweightCharts.CandlestickSeries, {
+      upColor: c.up, borderUpColor: c.up, wickUpColor: c.up,
+      downColor: c.down, borderDownColor: c.down, wickDownColor: c.down,
+      borderVisible: false,
+      priceLineVisible: false, lastValueVisible: false,   // 价格标签由自定义彩色价线提供, 避免双标签
+      priceFormat: { type: 'price', precision: 2, minMove: 0.25 },
+    }, 0);
+
+    // v5: 成交标记是独立 primitive(不再是 series.setMarkers), 构造时自动 attach
+    this.markersPlugin = LightweightCharts.createSeriesMarkers(this.candle, []);
+
+    // 成交量独立 pane (约占 18% 高度)
+    this.volPane = this.chart.addPane();
+    this.volPane.setStretchFactor(0.22);
+    this.vol = this.chart.addSeries(LightweightCharts.HistogramSeries, {
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'vol',
+      priceLineVisible: false, lastValueVisible: false,
+    }, 1);
+    this.chart.priceScale('vol').applyOptions({
+      scaleMargins: { top: 0.15, bottom: 0 },
+      visible: false,
+    });
+
+    this.ema = this.chart.addSeries(LightweightCharts.LineSeries, {
+      color: '#f7b731', lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    }, 0);
+
+    const ro = new ResizeObserver(() => this.resize());
+    ro.observe(document.getElementById('chartWrap'));
+
+    this.chart.subscribeCrosshairMove(param => this.onCrosshair(param));
+  },
+
+  resize() {
+    const el = document.getElementById('chartMain');
+    const w = el.clientWidth, h = el.clientHeight;
+    if (w > 0 && h > 0) this.chart.applyOptions({ width: w, height: h });
+  },
+
+  /* ---------- 主题 ---------- */
+  applyTheme(mode) {
+    this.theme = mode;
+    const t = this.themeColors();
+    this.chart.applyOptions({
+      layout: { background: { type: 'solid', color: t.bg }, textColor: t.text },
+      grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+      crosshair: {
+        vertLine: { color: t.crosshair, labelBackgroundColor: t.label },
+        horzLine: { color: t.crosshair, labelBackgroundColor: t.label },
+      },
+      rightPriceScale: { borderColor: t.border },
+      timeScale: { borderColor: t.border },
+    });
+    if (this._lastData && this._lastData.length) {
+      this.setData(this._lastData, { preserve: true });
+    }
+  },
+
+  setScheme(scheme) {
+    this.scheme = scheme;
+    const c = this.colors();
+    this.candle.applyOptions({
+      upColor: c.up, borderUpColor: c.up, wickUpColor: c.up,
+      downColor: c.down, borderDownColor: c.down, wickDownColor: c.down,
+    });
+    if (this._lastData && this._lastData.length) {
+      this.setData(this._lastData, { preserve: true });
+    }
+  },
+
+  setTf(tf) { this.tf = tf; this.chart.timeScale().applyOptions({ timeVisible: !(tf === '1d' || tf === '1w'), secondsVisible: false }); },
+
+  setEmaEnabled(on) { this.emaEnabled = on; if (!on) this.ema.setData([]); },
+
+  /* ---------- 视窗控制 (TradingView 行为: 不打断用户缩放/拖动) ---------- */
+  /** 显示最近 n 根, 右侧留白 (新图初始状态) */
+  fitRecent(n = 180) {
+    const total = this._lastData ? this._lastData.length : 0;
+    if (!total) return;
+    this.chart.timeScale().setVisibleLogicalRange({
+      from: Math.max(0, total - n) - 0.5, to: total + 5,
+    });
+  },
+
+  /** 以某根为中心显示 (切周期/时段时锚定原时间位置, 不像 fitContent 那样跳走) */
+  fitAround(idx, n = 140) {
+    if (!this._lastData || !this._lastData.length) return;
+    const total = this._lastData.length;
+    const i = Math.min(Math.max(0, idx), total - 1);
+    const from = Math.max(0, i - n * 0.8);
+    const to = Math.min(total + 5, i + n * 0.2 + 4);
+    this.chart.timeScale().setVisibleLogicalRange({ from, to });
+  },
+
+  fitAll() {
+    if (!this._lastData || !this._lastData.length) return;
+    this.chart.timeScale().fitContent();
+  },
+
+  /** 当前视窗 (供"是否跟随"判断/测试) */
+  visibleRange() {
+    try { return this.chart.timeScale().getVisibleLogicalRange(); } catch (e) { return null; }
+  },
+
+  /**
+   * 全量替换数据
+   * @param {boolean|string} opts.fit  false=保持视窗 | 'recent'=最近180根 | 'all'=全部
+   * @param {boolean} opts.preserve     true=恢复调用前的可见区间
+   */
+  setData(bars, opts = {}) {
+    const ts = this.chart.timeScale();
+    let prev = null;
+    if (opts.preserve && !opts.fit) prev = this.visibleRange();
+
+    this._lastData = bars.slice();
+    const candleData = new Array(bars.length);
+    const volData = new Array(bars.length);
+    const emaData = [];
+    for (let i = 0; i < bars.length; i++) {
+      const b = bars[i];
+      candleData[i] = { time: b.t, open: b.o, high: b.h, low: b.l, close: b.c };
+      volData[i] = { time: b.t, value: b.v, color: this.volColor(b) };
+      if (this.emaEnabled && b.ema != null) emaData.push({ time: b.t, value: b.ema });
+    }
+    this.candle.setData(candleData);
+    this.vol.setData(volData);
+    this.ema.setData(emaData);
+    if (bars.length) this.setLastPrice(bars[bars.length - 1]);
+
+    if (opts.fit === 'recent') this.fitRecent();
+    else if (opts.fit === 'all') this.fitAll();
+    else if (prev) {
+      // 跟随态判断: 视窗右端贴着最新一根且新 bar 会跑出视窗 => 整体右移一格
+      // 否则严格恢复用户原来的视窗(不打断拖动/缩放)
+      const n = bars.length;
+      const follow = opts.followLast && prev.to < n && prev.to >= n - 3;
+      ts.setVisibleLogicalRange(follow
+        ? { from: prev.from + 1, to: prev.to + 1 }
+        : prev);
+    }
+    if (typeof Draw !== 'undefined' && Draw.render) Draw.render();     // 绘图层的 Bar Count 序号需跟随数据刷新
+  },
+
+  /**
+   * 回放推进: 追加一根, 按 TradingView 行为处理视窗
+   * - 视窗右端已在空白区(含 rightOffset) => 新 bar 直接填入, 视窗不动
+   * - 视窗右端贴着最后一根(跟随态) => 整体右移一格, 新 bar 从右侧推入
+   * - 用户把视窗拖到历史区 => 视窗完全不动, 新 bar 在视窗外(不打断用户)
+   */
+  appendBar(bar) {
+    const ts = this.chart.timeScale();
+    const r = this.visibleRange();                 // {from, to}
+    const newIdx = this._lastData.length;          // 新 bar 的逻辑索引
+    // 新 bar 会跑出视窗右端吗? 以及视窗是否本来就贴着右端(跟随态)?
+    const follow = r && r.to < newIdx && r.to >= newIdx - 3;
+
+    this._lastData.push(bar);
+    this.candle.update({ time: bar.t, open: bar.o, high: bar.h, low: bar.l, close: bar.c });
+    this.vol.update({ time: bar.t, value: bar.v, color: this.volColor(bar) });
+    if (this.emaEnabled && bar.ema != null) this.ema.update({ time: bar.t, value: bar.ema });
+    this.setLastPrice(bar);
+
+    // 跟随态: 用专用滚动 API 右移一格(同步 setVisibleLogicalRange 会被同一帧的渲染覆盖)
+    if (follow) {
+      try { ts.scrollToPosition(1, false); }
+      catch (e) { ts.setVisibleLogicalRange({ from: r.from + 1, to: r.to + 1 }); }
+    }
+    if (typeof Draw !== 'undefined' && Draw.render) Draw.render();
+  },
+
+  /** 右侧价格轴的最新价线 (颜色跟随涨跌, 类似 TV 的彩色价格标签) */
+  setLastPrice(bar) {
+    if (this.priceLine) { this.candle.removePriceLine(this.priceLine); this.priceLine = null; }
+    const c = this.colors();
+    this.priceLine = this.candle.createPriceLine({
+      price: bar.c, color: bar.c >= bar.o ? c.up : c.down, lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '',
+    });
+  },
+
+  /** 持仓均价线 */
+  setPosLine(price) {
+    if (this.posLine) { this.candle.removePriceLine(this.posLine); this.posLine = null; }
+    if (price != null) {
+      this.posLine = this.candle.createPriceLine({
+        price, color: '#2962ff', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '持仓',
+      });
+    }
+  },
+
+  setMarkers(list) {
+    // v5 要求 markers 按 time 升序; time 可能是 number(日内) 或 'yyyy-mm-dd'(日/周)
+    const sorted = list.slice().sort((a, b) => {
+      const ta = typeof a.time === 'string' ? a.time : String(a.time);
+      const tb = typeof b.time === 'string' ? b.time : String(b.time);
+      return ta < tb ? -1 : ta > tb ? 1 : 0;
+    });
+    this.markers = sorted;
+    this.markersPlugin.setMarkers(sorted);
+  },
+
+  /** 保存图表截图 */
+  screenshot(filename) {
+    try {
+      const cv = this.chart.takeScreenshot();
+      cv.toBlob(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = filename || ('ES-replay-' + Date.now() + '.png');
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      });
+      return true;
+    } catch (e) { return false; }
+  },
+
+  onCrosshair(param) {
+    if (!param || !param.time || !param.seriesData) {
+      if (App.onLegendIdle) App.onLegendIdle();
+      return;
+    }
+    const cd = param.seriesData.get(this.candle);
+    const vd = param.seriesData.get(this.vol);
+    if (App.onLegend) App.onLegend(cd, vd, param.time);
+  },
+};

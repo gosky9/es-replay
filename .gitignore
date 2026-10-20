@@ -1,0 +1,14 @@
+# 预处理后的二进制行情数据(约 300MB)，由 preprocess.py 生成，不入库
+data/*
+!data/meta.json
+
+# 运行期产物
+server.log
+port.txt
+_shot_*.png
+
+# 工具链
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store
