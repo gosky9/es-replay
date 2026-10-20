@@ -142,7 +142,7 @@ const ChartMgr = {
     const t = this.themeColors();
     this.chart.applyOptions({
       layout: { background: { type: 'solid', color: t.bg }, textColor: t.text },
-      grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+      grid: { vertLines: { visible: !!this.gridOn, color: t.grid }, horzLines: { visible: !!this.gridOn, color: t.grid } },
       crosshair: {
         vertLine: { color: t.crosshair, labelBackgroundColor: t.label },
         horzLine: { color: t.crosshair, labelBackgroundColor: t.label },
@@ -165,7 +165,23 @@ const ChartMgr = {
     }
   },
 
-  setTf(tf) { this.tf = tf; this.chart.timeScale().applyOptions({ timeVisible: !(tf === '1d' || tf === '1w'), secondsVisible: false }); },
+  setTf(tf) {
+    this.tf = tf;
+    const daily = (tf === '1d' || tf === '3d' || tf === '1w' || tf === '1M');
+    this.chart.timeScale().applyOptions({ timeVisible: !daily, secondsVisible: false });
+  },
+
+  /** 网格线开关 (顶栏 ⊞ 按钮; 默认关, 用户要求干净背景) */
+  setGrid(on) {
+    this.gridOn = !!on;
+    const t = this.themeColors();
+    this.chart.applyOptions({
+      grid: {
+        vertLines: { visible: this.gridOn, color: t.grid },
+        horzLines: { visible: this.gridOn, color: t.grid },
+      },
+    });
+  },
 
   setEmaEnabled(on) { this.emaEnabled = on; if (!on) this.ema.setData([]); },
 

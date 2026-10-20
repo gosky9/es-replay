@@ -7,6 +7,9 @@ server.log
 port.txt
 _shot_*.png
 _cmp_*.png
+_v*_*.png
+_z_*.png
+_smoke*.js
 
 # 工具链
 __pycache__/

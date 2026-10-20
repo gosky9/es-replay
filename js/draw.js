@@ -119,6 +119,7 @@ const Draw = {
   },
   removeSelected() {
     if (!this.selected) return false;
+    this.pushHistory();
     this.items = this.items.filter(i => i.id !== this.selected);
     this.selected = null;
     this.render();
@@ -126,6 +127,7 @@ const Draw = {
   },
   removeAll() {
     const n = this.items.length;
+    if (n) this.pushHistory();
     this.items = [];
     this.selected = null;
     this.draft = null;
@@ -134,9 +136,20 @@ const Draw = {
   },
   clearAll() {   // 换会话时静默清空
     this.items = []; this.selected = null; this.draft = null; this._drag = null;
+    this.undo = []; this.redo = [];
     this.render();
   },
   count() { return this.items.length; },
+
+  /* ---------- 撤销 / 重做 (顶栏 ↶ ↷) ---------- */
+  undo: [], redo: [],
+  MAX_UNDO: 60,
+  snapshot() { return JSON.parse(JSON.stringify(this.items)); },
+  pushHistory() {
+    this.undo.push(this.snapshot());
+    if (this.undo.length > this.MAX_UNDO) this.undo.shift();
+    this.redo.length = 0;
+  },
 
   cancel() {
     this.draft = null;
@@ -182,6 +195,7 @@ const Draw = {
       e.preventDefault(); e.stopPropagation();
       this.selected = hit.id;
       const it = this.items.find(i => i.id === hit.id);
+      this.pushHistory();                      // 拖动前留快照, 供 ↶ 撤销
       this._drag = {
         id: hit.id, part: hit.part, startX: x, startY: y,
         orig: JSON.parse(JSON.stringify(it)),
@@ -195,8 +209,8 @@ const Draw = {
     const p = this.snapPrice(x, y);
     if (p == null) return;
 
-    if (this.tool === 'hline') { this.addItem({ type: 'hline', a: { t, p }, b: { t, p } }); this.setTool('cursor'); return; }
-    if (this.tool === 'vline') { this.addItem({ type: 'vline', a: { t, p }, b: { t, p } }); this.setTool('cursor'); return; }
+    if (this.tool === 'hline') { this.pushHistory(); this.addItem({ type: 'hline', a: { t, p }, b: { t, p } }); this.setTool('cursor'); return; }
+    if (this.tool === 'vline') { this.pushHistory(); this.addItem({ type: 'vline', a: { t, p }, b: { t, p } }); this.setTool('cursor'); return; }
     if (this.tool === 'text') { this.startTextInput(x, y, t, p); return; }
 
     if (!this.draft) {
@@ -221,6 +235,7 @@ const Draw = {
       ok = Math.hypot(x2 - x1, y2 - y1) >= this.MIN_DRAW_PX;
     }
     if (ok) {
+      this.pushHistory();
       // 尺子只保留最新一次测量 (TradingView 的 ruler 也是单实例), 其他类型可累积
       if (d.type === 'measure') this.items = this.items.filter(i => i.type !== 'measure');
       this.addItem({ type: d.type, a: d.a, b: d.b, text: d.text });
@@ -303,7 +318,7 @@ const Draw = {
       const v = (inp.value || '').trim();
       if (inp.parentNode) inp.remove();
       this._textInput = null;
-      if (ok && v) this.addItem({ type: 'text', a: { t, p }, b: { t, p }, text: v });
+      if (ok && v) { this.pushHistory(); this.addItem({ type: 'text', a: { t, p }, b: { t, p }, text: v }); }
       this.setTool('cursor');
     };
     inp.addEventListener('keydown', ev => {
@@ -591,31 +606,59 @@ const Draw = {
       if (selected) this.handles(ctx, [[ax, ay]]);
     } else if (it.type === 'measure') {
       if (ax == null || ay == null || bx == null || by == null) { ctx.restore(); return; }
-      const x0 = Math.min(ax, bx), y0 = Math.min(ay, by);
-      const w = Math.abs(bx - ax), h = Math.abs(by - ay);
-      const up = it.b.p >= it.a.p;
-      const pal = ChartMgr.colors();                   // 黑白盘面下即墨色
-      const rc = up ? pal.up : pal.down;
-      ctx.fillStyle = this.alpha(rc, 0.07);
+      // 照 reference/03 截图: 淡蓝填充 + 过中心的十字线(顶端/右端带箭头) + 蓝色三行标签
+      const BLUE = '#2962ff';
+      const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx);
+      const y0 = Math.min(ay, by), y1 = Math.max(ay, by);
+      const w = x1 - x0, h = y1 - y0;
+      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+
+      ctx.fillStyle = this.alpha(BLUE, 0.14);
       ctx.fillRect(x0, y0, w, h);
-      ctx.strokeStyle = rc;
-      ctx.setLineDash([4, 3]);
-      ctx.strokeRect(x0, y0, w, h);
-      ctx.setLineDash([]);
+      ctx.strokeStyle = this.alpha(BLUE, 0.32);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x0 + 0.5, y0 + 0.5, w, h);
+
+      // 十字轴线 + 箭头
+      ctx.strokeStyle = BLUE;
+      ctx.lineWidth = 1.2;
+      ctx.fillStyle = BLUE;
+      const AR = 6;
+      // 竖线: 从中心列往下到底边, 顶端箭头向上再伸出 12px
+      const vTop = y0 - 12;
+      ctx.beginPath(); ctx.moveTo(cx, vTop + AR); ctx.lineTo(cx, y1); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx, vTop); ctx.lineTo(cx - 4.2, vTop + AR); ctx.lineTo(cx + 4.2, vTop + AR);
+      ctx.closePath(); ctx.fill();
+      // 横线: 从左边到中心行, 右端箭头向右再伸出 10px
+      const hRight = x1 + 10;
+      ctx.beginPath(); ctx.moveTo(x0, cy); ctx.lineTo(hRight - AR, cy); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(hRight, cy); ctx.lineTo(hRight - AR, cy - 4.2); ctx.lineTo(hRight - AR, cy + 4.2);
+      ctx.closePath(); ctx.fill();
+
+      // 标签: 变化值 (百分比) 跳动点数 / N根K线, 时长 / 成交量
+      const st = this._rangeStats(it.a.t, it.b.t);
       const dP = it.b.p - it.a.p;
       const pct = it.a.p ? dP / it.a.p * 100 : 0;
-      const bars = this._barsBetween(it.a.t, it.b.t);
-      const l1 = `${dP >= 0 ? '+' : ''}${dP.toFixed(2)}  (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
-      const l2 = `${bars} 根`;
+      const ticks = Math.round(dP / 0.25);
+      const l1 = `${dP >= 0 ? '' : '-'}${Math.abs(dP).toFixed(2)} (${pct >= 0 ? '' : '-'}${Math.abs(pct).toFixed(2)}%) ${Math.abs(ticks)}`;
+      const l2 = `${st.bars}根K线, ${st.dur}`;
+      const l3 = `成交量 ${st.vol}`;
+
       ctx.font = '12px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
-      const tw = Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 14;
-      const bx2 = x0 + w + 6, by2 = y0 + Math.min(h / 2, 20);
-      ctx.fillStyle = this.alpha(rc, 0.92);
-      ctx.fillRect(bx2, by2 - 10, tw, 34);
+      const tw = Math.max(ctx.measureText(l1).width,
+                          ctx.measureText(l2).width,
+                          ctx.measureText(l3).width) + 18;
+      const th = 60;
+      const lx = x0, ly = Math.max(2, y0 - 8 - th);
+      this.roundRect(ctx, lx, ly, tw, th, 5);
+      ctx.fillStyle = BLUE; ctx.fill();
       ctx.fillStyle = '#fff';
       ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-      ctx.fillText(l1, bx2 + 7, by2 + 2);
-      ctx.fillText(l2, bx2 + 7, by2 + 17);
+      ctx.fillText(l1, lx + 9, ly + 14);
+      ctx.fillText(l2, lx + 9, ly + 30);
+      ctx.fillText(l3, lx + 9, ly + 46);
       if (selected) this.handles(ctx, [[ax, ay], [bx, by]]);
     }
     ctx.restore();
@@ -646,6 +689,50 @@ const Draw = {
     }
     if (i1 < 0 || i2 < 0) return 0;
     return Math.abs(i2 - i1) + 1;
+  },
+
+  /** 尺子标签用的统计: 根数 / 时长 / 成交量 (照 reference/03 截图) */
+  _rangeStats(t1, t2) {
+    const bars = ChartMgr._lastData || [];
+    let i1 = -1, i2 = -1;
+    for (let i = 0; i < bars.length; i++) {
+      if (bars[i].t === t1) i1 = i;
+      if (bars[i].t === t2) i2 = i;
+      if (i1 >= 0 && i2 >= 0) break;
+    }
+    if (i1 < 0 || i2 < 0) return { bars: 0, dur: '—', vol: '—' };
+    const a = Math.min(i1, i2), b = Math.max(i1, i2);
+    let v = 0;
+    for (let i = a; i <= b; i++) v += (bars[i].v || 0);
+    const n = b - a + 1;
+    const tfMin = (typeof TF_MINUTES !== 'undefined' && TF_MINUTES[ChartMgr.tf]) || 5;
+    const mins = n * tfMin;
+    let dur;
+    if (mins < 60) dur = `${mins}分钟`;
+    else if (mins < 1440) {
+      const hh = Math.floor(mins / 60), mm = mins % 60;
+      dur = mm ? `${hh}小时${mm}分钟` : `${hh}小时`;
+    } else {
+      const dd = Math.floor(mins / 1440), hh = Math.round((mins % 1440) / 60);
+      dur = hh ? `${dd}天${hh}小时` : `${dd}天`;
+    }
+    return { bars: n, dur, vol: this._fmtVol(v) };
+  },
+
+  _fmtVol(v) {
+    if (v >= 1e6) return (v / 1e6).toFixed(2) + ' M';
+    if (v >= 1e3) return (v / 1e3).toFixed(2) + ' K';
+    return String(Math.round(v));
+  },
+
+  roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
   },
 
   alpha(hex, a) {

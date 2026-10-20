@@ -56,8 +56,8 @@ button, select, input { font-family: inherit; }
 
 /* ============ 顶栏 (TradingView) ============ */
 #topbar {
-  height: 48px; flex: none; display: flex; align-items: center;
-  justify-content: space-between; padding: 0 10px;
+  height: 44px; flex: none; display: flex; align-items: center;
+  justify-content: space-between; padding: 0 8px;
   background: var(--bg-panel); border-bottom: 1px solid var(--border);
 }
 .tb-left, .tb-right { display: flex; align-items: center; gap: 4px; min-width: 0; }
@@ -430,10 +430,214 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
 
 /* ============ Toast ============ */
 .toast {
-  position: fixed; top: 58px; left: 50%; transform: translateX(-50%);
+  position: fixed; bottom: 62px; left: 62px;
   background: var(--bg-panel); border: 1px solid var(--border); color: var(--text);
   padding: 9px 18px; border-radius: 6px; font-size: 13px; z-index: 200;
   opacity: 0; pointer-events: none; transition: opacity .25s; box-shadow: var(--shadow);
 }
 .toast.show { opacity: 1; }
 .toast.warn { border-color: var(--warn); }
+
+/* ================================================================
+   2.0 — 照 reference/02 截图重建的顶栏 / 收藏条 / 回放条 / 底部栏
+   ================================================================ */
+
+/* ---------- 顶栏: 品种区 ---------- */
+.sym-id {
+  font-size: 11px; color: var(--text-dim); letter-spacing: .3px;
+  align-self: center; margin-left: 1px;
+}
+.tb-mini {
+  width: 22px; height: 22px; flex: none; display: inline-flex;
+  align-items: center; justify-content: center; padding: 0;
+  background: transparent; border: none; color: var(--text-dim);
+  border-radius: 4px; cursor: pointer;
+}
+.tb-mini svg { width: 15px; height: 15px; }
+.tb-mini:hover { background: var(--bg-hover); color: var(--text); }
+
+/* ---------- 顶栏: 图标按钮 / 文字按钮 ---------- */
+.tb-icon {
+  width: 28px; height: 28px; flex: none; display: inline-flex;
+  align-items: center; justify-content: center; padding: 0;
+  background: transparent; border: none; color: var(--text-dim);
+  border-radius: 4px; cursor: pointer;
+}
+.tb-icon svg { width: 17px; height: 17px; }
+.tb-icon:hover { background: var(--bg-hover); color: var(--text); }
+.tb-icon.on { color: var(--accent); background: var(--bg-hover); }
+
+.tb-txt {
+  display: inline-flex; align-items: center; gap: 4px; flex: none;
+  height: 28px; padding: 0 7px; background: transparent; border: none;
+  color: var(--text-dim); font-size: 12px; border-radius: 4px; cursor: pointer;
+  white-space: nowrap;
+}
+.tb-txt:hover { background: var(--bg-hover); color: var(--text); }
+.tb-txt-sm { font-size: 11px; }
+.tb-txt .chev { width: 7px; height: 5px; opacity: .85; }
+.tb-txt.active { color: var(--accent); }
+
+/* 回放深色胶囊 (截图: 顶栏中部黑色圆角块) */
+.tb-replay-pill {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  height: 26px; padding: 0 11px; margin: 0 2px;
+  background: #131722; color: #fff; border: none; border-radius: 5px;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.tb-replay-pill svg { width: 13px; height: 13px; }
+.tb-replay-pill:hover { background: #2a2e39; }
+body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
+
+/* 周期条: 中文标签, 更紧凑 */
+.tf-group button { padding: 5px 6px; font-size: 12px; }
+.tf-more-btn {
+  width: 16px; height: 26px; padding: 0; background: transparent; border: none;
+  color: var(--text-dim); cursor: pointer; display: inline-flex;
+  align-items: center; justify-content: center;
+}
+.tf-more-btn svg { width: 7px; height: 5px; fill: currentColor; }
+.tf-more-btn:hover { color: var(--text); }
+
+/* 小号分段 (ETH/RTH) */
+.seg-tiny button { padding: 3px 7px; font-size: 11px; }
+
+/* ---------- 指标下拉菜单 ---------- */
+.ind-menu {
+  position: fixed; z-index: 60; display: none; min-width: 150px;
+  padding: 4px; background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 6px; box-shadow: var(--shadow);
+}
+.ind-menu.open { display: block; }
+.ind-menu label {
+  display: flex; align-items: center; gap: 7px; padding: 6px 9px;
+  border-radius: 4px; font-size: 12px; color: var(--text); cursor: pointer;
+}
+.ind-menu label:hover { background: var(--bg-hover); }
+.ind-menu input { accent-color: var(--accent); cursor: pointer; }
+
+/* ---------- 顶部浮层: 图例 + 收藏白条 同一行 ---------- */
+#topOverlay {
+  position: absolute; top: 3px; left: 8px; right: 8px; z-index: 13;
+  display: flex; align-items: flex-start; gap: 16px;
+  pointer-events: none;
+}
+#topOverlay > * { pointer-events: auto; }
+#topOverlay #legend { position: static; }
+
+/* 收藏白条: 圆角悬浮, 不再是通栏 */
+#drawBar {
+  display: flex; align-items: center; gap: 1px; flex: none;
+  height: 26px; padding: 0 5px 0 2px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  box-shadow: 0 1px 4px rgba(19,23,34,.10);
+  overflow: hidden;
+}
+.db-grip {
+  width: 12px; height: 20px; display: inline-flex; align-items: center;
+  justify-content: center; color: var(--border-strong); cursor: grab; flex: none;
+}
+.db-grip svg { width: 8px; height: 14px; }
+.dbtn { width: 24px; height: 22px; border-radius: 4px; }
+.dbtn svg { width: 17px; height: 17px; }
+.dbtn.active { background: var(--bg-hover); color: var(--accent); }
+.dsep { height: 14px; margin: 0 3px; }
+
+/* ---------- 回放条: 贴时间轴上方的白色方块 ---------- */
+#replayBar {
+  position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
+  z-index: 20; display: flex; align-items: center; gap: 3px;
+  padding: 3px 6px; background: var(--bg-panel);
+  border: 1px solid var(--border); border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(19,23,34,.12);
+  max-width: calc(100% - 20px);
+  transition: opacity .18s;
+}
+#replayBar.hidden { opacity: 0; pointer-events: none; }
+.rb-progress { display: none; }
+.rb-pick {
+  display: inline-flex; align-items: center; gap: 5px; flex: none;
+  height: 24px; padding: 0 8px; background: transparent; border: none;
+  color: var(--text); font-size: 12px; border-radius: 4px; cursor: pointer;
+  white-space: nowrap;
+}
+.rb-pick svg { width: 13px; height: 13px; color: var(--accent); }
+.rb-pick .chev { width: 7px; height: 5px; color: var(--text-dim); }
+.rb-pick:hover { background: var(--bg-hover); }
+.rb-div { width: 1px; height: 16px; background: var(--border); margin: 0 5px; flex: none; }
+.rb-sel {
+  height: 22px; padding: 0 2px; background: transparent; border: none;
+  color: var(--text); font-size: 12px; cursor: pointer; outline: none;
+}
+.rb-sel:hover { background: var(--bg-hover); border-radius: 4px; }
+.rb-info {
+  display: inline-flex; align-items: center; gap: 6px; margin: 0 6px;
+  font-size: 11px; color: var(--text-dim); white-space: nowrap;
+}
+.rb-info b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.rb-info i { font-style: normal; font-variant-numeric: tabular-nums; }
+
+/* ---------- 底部栏: 区间按钮 + 回放交易 / 状态条 ---------- */
+#bottomBar {
+  height: 26px; flex: none; display: flex; align-items: center;
+  justify-content: space-between; padding: 0 6px;
+  background: var(--bg-panel); border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--text-dim);
+}
+.bb-left, .bb-right { display: flex; align-items: center; gap: 1px; }
+#rangeGroup button {
+  background: transparent; border: none; color: var(--text-dim);
+  font-size: 11px; padding: 3px 7px; border-radius: 3px; cursor: pointer;
+  white-space: nowrap;
+}
+#rangeGroup button:hover { background: var(--bg-hover); color: var(--text); }
+#rangeGroup button.active { color: var(--text); font-weight: 600; background: var(--bg-hover); }
+.bb-div { width: 1px; height: 13px; background: var(--border); margin: 0 7px; flex: none; }
+.bb-replay {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: transparent; border: none; color: var(--text);
+  font-size: 11px; padding: 3px 7px; border-radius: 3px; cursor: pointer;
+}
+.bb-replay svg { width: 13px; height: 13px; }
+.bb-replay:hover { background: var(--bg-hover); }
+.bb-right { gap: 9px; font-variant-numeric: tabular-nums; }
+#statusClock { color: var(--text-dim); }
+#statusSession { color: var(--text); font-weight: 600; }
+#statusAdj { color: var(--text-dim); }
+
+/* 回放条里的日期跳转输入 */
+.rb-date {
+  width: 118px; height: 22px; padding: 0 6px; margin: 0 2px;
+  background: transparent; border: 1px solid transparent; border-radius: 4px;
+  color: var(--text); font-size: 11px; font-family: inherit; outline: none;
+  font-variant-numeric: tabular-nums;
+}
+.rb-date:hover { border-color: var(--border); }
+.rb-date:focus { border-color: var(--accent); }
+.rb-go { width: 20px; height: 20px; }
+.rb-go svg { width: 13px; height: 13px; }
+
+/* 左侧工具栏: 图标密度对齐截图, 窗口矮时可滚动 */
+#sideToolbar { overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
+#sideToolbar::-webkit-scrollbar { width: 0; }
+.tool { width: 34px; height: 34px; }
+.tool-sep { margin: 4px 0; }
+
+/* 顶栏防换行: 周期按钮不折行, 窄屏时按 TradingView 的做法逐步收起图标 */
+.tb-left { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.tb-right { flex: none; }
+.tf-group { flex: none; }
+.tf-group button { white-space: nowrap; flex: none; }
+.lg-ohlc { white-space: nowrap; }
+.lg-name { white-space: nowrap; }
+@media (max-width: 1500px) {
+  #compareBtn, #cmpSymBtn, #intervalBtn, #langBtn { display: none; }
+}
+@media (max-width: 1320px) {
+  #layoutBtn, #clockBtn, #settingsBtn, #chartTypeBtn, #alertBtn { display: none; }
+}
+@media (max-width: 1180px) {
+  #gridBtn, #undoBtn, #redoBtn { display: none; }
+}

@@ -185,7 +185,7 @@ const waitLoaded = page => page.waitForFunction(
   await page.waitForTimeout(500);
   const bc4 = await page.textContent('#barCount');
   const tfOk = await page.evaluate(() => App.tf === '15m' && App.engine.total > 0);
-  check('周期切换 15m', tfOk && /\/ \d+$/.test(bc4), bc4 + ' | 顶部标记 ' + await page.textContent('#symMeta'));
+  check('周期切换 15m', tfOk && /\/ \d+$/.test(bc4), bc4 + ' | 图例周期 ' + await page.textContent('#lgTf'));
 
   /* 9. 时段切换 ETH → RTH */
   await page.click('#sessionSeg button[data-session="eth"]');
@@ -209,14 +209,18 @@ const waitLoaded = page => page.waitForFunction(
   await page.waitForTimeout(400);
 
   /* 10. 自选复盘 2024-03-15 09:35 ET */
-  await page.click('#customBtn');
+  await page.click('#symbolBlock');
+  await page.waitForTimeout(120);
+  await page.click('#startBtn');
   await waitLoaded(page);
   await page.waitForTimeout(500);
   const t6 = await page.textContent('#replayTime');
   check('自选起点=2024-03-15', t6.startsWith('2024-03-15'), t6);
 
   /* 11. 随机复盘 + 会话重置 */
-  await page.click('#randomBtn');
+  await page.click('#replayPillBtn');
+  await page.waitForTimeout(120);
+  await page.click('#startBtn');
   await waitLoaded(page);
   await page.waitForTimeout(500);
   const t7 = await page.textContent('#replayTime');
@@ -265,7 +269,7 @@ const waitLoaded = page => page.waitForFunction(
 
   check('收藏工具横条可见', await page.isVisible('#drawBar'));
   const dbarN = await page.evaluate(() => document.querySelectorAll('#drawBar button[data-tool]').length);
-  check('收藏横条按钮数', dbarN >= 11, String(dbarN) + ' 个');
+  check('收藏横条按钮数', dbarN === 8, String(dbarN) + ' 个');
 
   const box = await page.locator('#chartMain').boundingBox();
   const P = (dx, dy) => ({ x: box.x + dx, y: box.y + dy });
@@ -328,7 +332,7 @@ const waitLoaded = page => page.waitForFunction(
   check('隐藏/显示绘图切换', hid1 === true && hid2 === false);
 
   // 选中并删除 (Delete)
-  await page.click('#drawBar button[data-tool="cursor"]');
+  await page.click('#sideToolbar button[data-tool="cursor"]');
   await page.mouse.click(P(360, 205).x, P(360, 205).y);   // 趋势线中点
   const sel = await page.evaluate(() => Draw.selected);
   check('点击选中已有绘图', sel != null, 'selected=' + sel);
@@ -346,12 +350,15 @@ const waitLoaded = page => page.waitForFunction(
   check('Bar Count 默认开启 + 图例当日序号', bcOn === true && +lgBar === dayNoNow,
         'lgBarIdx=' + lgBar + ' / dayNo=' + dayNoNow);
   check('图例 EMA 值', /^\d+\.\d{2}$/.test(lgEma), lgEma);
-  await page.click('#drawBar button[data-tool="barcount"]');
+  await page.click('#indicatorBtn');
+  await page.waitForTimeout(120);
+  await page.click('#indBarCount');
   await page.waitForTimeout(120);
   check('关闭 Bar Count 后隐藏图例行',
         (await page.evaluate(() => Draw.showBarCount)) === false
         && (await page.evaluate(() => document.getElementById('lgBarRow').classList.contains('hidden-row'))));
-  await page.click('#drawBar button[data-tool="barcount"]');
+  await page.click('#indBarCount');
+  await page.waitForTimeout(120);
 
   // 一键删除全部绘图
   await page.click('#drawBar button[data-tool="trash"]');
@@ -488,6 +495,101 @@ const waitLoaded = page => page.waitForFunction(
   await page.click('#themeBtn');
   await page.waitForTimeout(400);
   check('切回浅色主题', (await page.evaluate(() => document.body.dataset.theme)) === 'light');
+
+  /* 17. 1:1 复刻项: 顶栏周期 / 底部区间 / 状态条 / 尺子标签 / 占位工具 / 撤销重做 / 网格 */
+  const tfLabels = await page.evaluate(() =>
+    [...document.querySelectorAll('#tfGroup button[data-tf]')].map(b => b.textContent.trim()));
+  check('顶栏 12 个中文周期', tfLabels.length === 12 && tfLabels[0] === '1分'
+        && tfLabels.includes('3天') && tfLabels.includes('月') && tfLabels.includes('12小时'),
+        tfLabels.join(' '));
+
+  for (const tf of ['2m', '3d', '1M']) {
+    await page.click('#tfGroup button[data-tf="' + tf + '"]');
+    await waitLoaded(page);
+    await page.waitForTimeout(400);
+    const ok = await page.evaluate(t => App.tf === t && App.bars.length > 100
+      && App.engine.total > 0, tf);
+    check('周期可用 ' + tf, ok, await page.evaluate(() => App.bars.length + ' 根'));
+  }
+  await page.click('#tfGroup button[data-tf="5m"]');
+  await waitLoaded(page);
+  await page.waitForTimeout(400);
+
+  // 底部区间按钮 + 回放交易
+  const rangeN = await page.evaluate(() => document.querySelectorAll('#rangeGroup button[data-range]').length);
+  check('底部 9 个区间按钮', rangeN === 9, String(rangeN));
+  await page.click('#rangeGroup button[data-range="1d"]');
+  await page.waitForTimeout(300);
+  const r1d = await page.evaluate(() => {
+    const r = ChartMgr.chart.timeScale().getVisibleLogicalRange();
+    return r.to - r.from;
+  });
+  await page.click('#rangeGroup button[data-range="all"]');
+  await page.waitForTimeout(300);
+  const rall = await page.evaluate(() => {
+    const r = ChartMgr.chart.timeScale().getVisibleLogicalRange();
+    return r.to - r.from;
+  });
+  check('区间按钮改变视窗', r1d > 0 && rall > r1d, '1天=' + Math.round(r1d) + ' 全部=' + Math.round(rall));
+
+  // 右下状态条
+  const st = await page.evaluate(() => ({
+    clock: document.getElementById('statusClock').textContent,
+    tz: document.getElementById('statusTz').textContent,
+    ses: document.getElementById('statusSession').textContent,
+    adj: document.getElementById('statusAdj').textContent,
+  }));
+  check('右下状态条 时间/时区/时段/复权', /^\d{2}:\d{2}:\d{2}$/.test(st.clock)
+        && /^UTC[+-]\d+/.test(st.tz) && st.ses === 'RTH' && st.adj === 'B-ADJ', JSON.stringify(st));
+
+  // 尺子三行标签 (变化值/百分比/tick · 根数/时长 · 成交量)
+  const stats = await page.evaluate(() => {
+    const bars = ChartMgr._lastData;
+    const a = bars[10], b = bars[30];
+    Draw.items.push({ id: 9999, type: 'measure', a: { t: a.t, p: a.c }, b: { t: b.t, p: b.c }, color: '#2962ff' });
+    const s = Draw._rangeStats(a.t, b.t);
+    const r = { bars: s.bars, dur: s.dur, vol: s.vol,
+                dP: +(b.c - a.c).toFixed(2), ticks: Math.round((b.c - a.c) / 0.25) };
+    Draw.items = Draw.items.filter(i => i.id !== 9999);
+    return r;
+  });
+  check('尺子统计: 21 根 / 时长 / 成交量 / tick',
+        stats.bars === 21 && /分钟|小时/.test(stats.dur) && /K|M/.test(stats.vol),
+        JSON.stringify(stats));
+
+  // 占位工具: 点击只提示"还没做", 不改变当前工具
+  await page.click('#sideToolbar button[data-tool="gannbox"]');
+  await page.waitForTimeout(150);
+  const ph = await page.evaluate(() => ({
+    toast: document.getElementById('toast').textContent,
+    tool: Draw.tool,
+  }));
+  check('未实现工具点击提示"还没做"', /还没做/.test(ph.toast) && ph.tool === 'cursor', JSON.stringify(ph));
+
+  // 撤销 / 重做
+  await page.click('#drawBar button[data-tool="hline"]');
+  const boxU = await page.locator('#chartMain').boundingBox();
+  await page.mouse.click(boxU.x + 200, boxU.y + 200);
+  await page.waitForTimeout(150);
+  const nBeforeUndo = await page.evaluate(() => Draw.count());
+  await page.click('#undoBtn');
+  await page.waitForTimeout(150);
+  const nAfterUndo = await page.evaluate(() => Draw.count());
+  await page.click('#redoBtn');
+  await page.waitForTimeout(150);
+  const nAfterRedo = await page.evaluate(() => Draw.count());
+  check('撤销 / 重做绘图', nBeforeUndo === 1 && nAfterUndo === 0 && nAfterRedo === 1,
+        `${nBeforeUndo} → ${nAfterUndo} → ${nAfterRedo}`);
+  await page.evaluate(() => Draw.clearAll());
+
+  // 网格开关
+  await page.click('#gridBtn');
+  await page.waitForTimeout(200);
+  const gridOn = await page.evaluate(() => !!ChartMgr.chart.options().grid.vertLines.visible);
+  await page.click('#gridBtn');
+  await page.waitForTimeout(200);
+  const gridOff2 = await page.evaluate(() => !!ChartMgr.chart.options().grid.vertLines.visible);
+  check('网格开关 (默认关)', gridOn === true && gridOff2 === false);
 
   /* 15. 截图 + 错误汇总 */
   await page.click('#btnRestart');

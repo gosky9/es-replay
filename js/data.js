@@ -91,17 +91,64 @@ const DataLoader = {
   },
 
   /**
+   * 客户端聚合: 由基础周期合成 2分 / 3天 / 月线 (参考截图顶栏有这三个周期)
+   * mode='count' 每 n 根合成一根(时间取首根) | mode='month' 按 ET 自然月合成
+   */
+  aggregate(data, mode, n) {
+    const t = [], o = [], h = [], l = [], c = [], v = [], off = [];
+    let cur = null;
+    const push = () => {
+      if (!cur) return;
+      t.push(cur.t); o.push(cur.o); h.push(cur.h); l.push(cur.l);
+      c.push(cur.c); v.push(cur.v); off.push(cur.off);
+      cur = null;
+    };
+    let grpCount = 0, lastKey = '';
+    for (let i = 0; i < data.count; i++) {
+      let key;
+      if (mode === 'month') {
+        const p = etParts(data.time[i], data.off[i]);
+        key = p.y * 100 + p.mo;
+      } else {
+        // 按"从数据起点算起的第几组"分桶, 保证同一文件内分桶稳定
+        key = Math.floor(i / n);
+      }
+      if (key !== lastKey) { push(); lastKey = key; grpCount = 0; }
+      const O = data.open[i], H = data.high[i], L = data.low[i], C = data.close[i];
+      if (!cur) cur = { t: data.time[i], o: O, h: H, l: L, c: C, v: data.volume[i], off: data.off[i] };
+      else {
+        if (H > cur.h) cur.h = H;
+        if (L < cur.l) cur.l = L;
+        cur.c = C;
+        cur.v += data.volume[i];
+      }
+      grpCount++;
+    }
+    push();
+    return {
+      time: Int32Array.from(t), off: Int8Array.from(off),
+      open: Float32Array.from(o), high: Float32Array.from(h),
+      low: Float32Array.from(l), close: Float32Array.from(c),
+      volume: Uint32Array.from(v), count: t.length,
+    };
+  },
+
+  /**
    * 取回放窗口: 目标点 P 之前 contextBars 根 + 之后 forwardBars 根
    * 返回 { bars, startIdx } — bars 为纯数组对象, startIdx 为 P 在 bars 中的下标
    */
   async loadWindow(session, tf, targetEpoch, contextBars, forwardBars) {
+    const der = DERIVED_TF[tf];
+    const baseTf = der ? der.base : tf;
     const tfMin = TF_MINUTES[tf];
     // 2 倍时间余量吸收周末/休市空洞
     const backSec  = contextBars * tfMin * 60 * 2.2;
     const fwdSec   = forwardBars * tfMin * 60 * 2.2;
     const from = targetEpoch - backSec;
     const to   = Math.min(targetEpoch + fwdSec, this.meta.range.last);
-    const data = await this.loadRange(session, tf, from, to);
+    let data = await this.loadRange(session, baseTf, from, to);
+    if (!data || data.count === 0) return null;
+    if (der) data = this.aggregate(data, der.group, der.n);
     if (!data || data.count === 0) return null;
     const iEnd = this.upperBound(data.time, data.count, targetEpoch); // P 之后的第一个
     const iStart = Math.max(0, iEnd - contextBars);
@@ -116,9 +163,25 @@ const DataLoader = {
   },
 };
 
-const TF_MINUTES = { '1m': 1, '5m': 5, '10m': 10, '15m': 15, '30m': 30, '1h': 60, '4h': 240, '12h': 720, '1d': 1440, '1w': 10080 };
-const TF_CODES = { '1m': 1, '5m': 2, '10m': 3, '15m': 4, '30m': 5, '1h': 6, '4h': 7, '12h': 8, '1d': 9, '1w': 10 };
-const TF_LABEL = { '1m': '1分钟', '5m': '5分钟', '10m': '10分钟', '15m': '15分钟', '30m': '30分钟', '1h': '1小时', '4h': '4小时', '12h': '12小时', '1d': '日线', '1w': '周线' };
+/**
+ * 由基础周期合成的周期 (参考截图顶栏: 2分 / 3天 / 月)
+ * base = 基础周期文件, group = 合成方式, n = 每几根合成一根
+ */
+const DERIVED_TF = {
+  '2m': { base: '1m', group: 'count', n: 2 },
+  '3d': { base: '1d', group: 'count', n: 3 },
+  '1M': { base: '1d', group: 'month', n: 1 },
+};
+
+const TF_MINUTES = {
+  '1m': 1, '2m': 2, '5m': 5, '10m': 10, '15m': 15, '30m': 30,
+  '1h': 60, '4h': 240, '12h': 720, '1d': 1440, '3d': 4320, '1w': 10080, '1M': 43200,
+};
+const TF_CODES = { '1m': 1, '2m': 11, '5m': 2, '10m': 3, '15m': 4, '30m': 5, '1h': 6, '4h': 7, '12h': 8, '1d': 9, '3d': 12, '1w': 10, '1M': 13 };
+const TF_LABEL = {
+  '1m': '1分钟', '2m': '2分钟', '5m': '5分钟', '10m': '10分钟', '15m': '15分钟', '30m': '30分钟',
+  '1h': '1小时', '4h': '4小时', '12h': '12小时', '1d': '日线', '3d': '3天', '1w': '周线', '1M': '月线',
+};
 
 /** 浏览器本地时区偏移(秒, 东为正) */
 const TZ_SHIFT = -new Date().getTimezoneOffset() * 60;

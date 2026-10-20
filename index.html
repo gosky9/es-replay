@@ -3,69 +3,139 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ES1! · 1分钟 · CME</title>
+<title>ES1! · 5分 · CME</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body data-theme="light">
 
-<!-- ============ 顶栏 (TradingView 布局) ============ -->
+<!-- ============ 顶栏 (照 reference/02 TradingView 截图) ============ -->
 <header id="topbar">
   <div class="tb-left">
+    <!-- 品种区: ES1! [00] ⊕ -->
     <div class="symbol-block" id="symbolBlock" title="点击选择复盘起点">
       <span class="sym-name">ES1!</span>
-      <span class="sym-meta" id="symMeta">· 5m · CME</span>
-      <svg class="chev" viewBox="0 0 8 5"><path d="M0 0l4 5 4-5z"/></svg>
+      <span class="sym-id">[00]</span>
     </div>
-
-    <div class="tb-sep"></div>
-
-    <div class="tf-group" id="tfGroup">
-      <button data-tf="1m">1m</button>
-      <button data-tf="5m" class="active">5m</button>
-      <button data-tf="15m">15m</button>
-      <button data-tf="30m">30m</button>
-      <button data-tf="1h">1H</button>
-      <button data-tf="4h">4H</button>
-      <button data-tf="1d">1D</button>
-      <button data-tf="1w">1W</button>
-      <select id="tfMore" class="tf-more" title="更多周期">
-        <option value="">▾</option>
-        <option value="10m">10分钟</option>
-        <option value="12h">12小时</option>
-      </select>
-    </div>
-
-    <div class="tb-sep"></div>
-
-    <button id="indicatorBtn" class="tv-txt-btn active" title="EMA20 (指数移动平均)">
-      <svg class="fx-icon" viewBox="0 0 28 28"><path d="M6 20c4-6 6-10 9-10s4 5 7 5" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
-      <span>指标</span>
+    <button class="tb-mini" id="symAddBtn" title="添加品种">
+      <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 6.4v7.2M6.4 10h7.2" stroke="currentColor" stroke-width="1.5"/></svg>
     </button>
 
     <div class="tb-sep"></div>
 
-    <div class="seg" id="sessionSeg">
+    <!-- 周期: 1分 2分 5分 10分 15分 1小时 4小时 天 3天 周 月 12小时 ▾ -->
+    <div class="tf-group" id="tfGroup">
+      <button data-tf="1m">1分</button>
+      <button data-tf="2m">2分</button>
+      <button data-tf="5m" class="active">5分</button>
+      <button data-tf="10m">10分</button>
+      <button data-tf="15m">15分</button>
+      <button data-tf="1h">1小时</button>
+      <button data-tf="4h">4小时</button>
+      <button data-tf="1d">天</button>
+      <button data-tf="3d">3天</button>
+      <button data-tf="1w">周</button>
+      <button data-tf="1M">月</button>
+      <button data-tf="12h">12小时</button>
+      <button class="tf-more-btn" id="tfMoreBtn" title="更多周期">
+        <svg viewBox="0 0 8 5"><path d="M0 0l4 5 4-5z" fill="currentColor"/></svg>
+      </button>
+    </div>
+
+    <div class="tb-sep"></div>
+
+    <!-- 图表类型 / 指标 / 网格 / 警报 / 回放 / 撤销重做 -->
+    <button class="tb-icon" id="chartTypeBtn" title="图表类型">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5"><path d="M7 4v16M7 7.5h3.5v9H7z" fill="none"/><path d="M16.5 4v16M16.5 9h3v6h-3z" fill="none"/></g></svg>
+    </button>
+    <button class="tb-txt" id="indicatorBtn" title="指标">
+      <svg class="fx-icon" viewBox="0 0 24 24"><path d="M3 17c4-8 6-11 8.5-11s3 5 5.5 5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      <span>指标</span>
+      <svg class="chev" viewBox="0 0 8 5"><path d="M0 0l4 5 4-5z" fill="currentColor"/></svg>
+    </button>
+    <button class="tb-icon" id="gridBtn" title="网格线开关">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3.5" y="3.5" width="17" height="17" rx="1"/><path d="M9.2 3.5v17M14.8 3.5v17M3.5 9.2h17M3.5 14.8h17"/></g></svg>
+    </button>
+    <button class="tb-icon" id="alertBtn" title="警报">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6.5 10a5.5 5.5 0 0111 0c0 4 1.5 5.5 1.5 5.5H5S6.5 14 6.5 10z"/><path d="M10 19a2 2 0 004 0"/></g></svg>
+    </button>
+    <button class="tb-replay-pill" id="replayPillBtn" title="回放 (Bar Replay)">
+      <svg viewBox="0 0 20 20"><path d="M6 4.5v11l9-5.5z" fill="currentColor"/></svg>
+      <span>回放</span>
+    </button>
+    <button class="tb-icon" id="undoBtn" title="撤销 (Ctrl+Z)">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M4 9h11a5 5 0 010 10H9"/><path d="M7.5 5.5L4 9l3.5 3.5"/></g></svg>
+    </button>
+    <button class="tb-icon" id="redoBtn" title="重做 (Ctrl+Y)">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M20 9H9a5 5 0 000 10h6"/><path d="M16.5 5.5L20 9l-3.5 3.5"/></g></svg>
+    </button>
+
+    <div class="tb-sep"></div>
+
+    <!-- 时段 (功能为用户要求; 参考截图无此控件) -->
+    <div class="seg seg-tiny" id="sessionSeg">
       <button data-session="eth">ETH</button>
       <button data-session="rth" class="active">RTH</button>
     </div>
   </div>
 
   <div class="tb-right">
-    <button id="themeBtn" class="tv-icon-btn" title="切换浅色/深色主题">
-      <svg viewBox="0 0 28 28" class="ic-sun"><circle cx="14" cy="14" r="5" fill="currentColor"/><g stroke="currentColor" stroke-width="1.8"><path d="M14 3v3M14 22v3M3 14h3M22 14h3M6.2 6.2l2.1 2.1M19.7 19.7l2.1 2.1M21.8 6.2l-2.1 2.1M8.3 19.7l-2.1 2.1"/></g></svg>
-      <svg viewBox="0 0 28 28" class="ic-moon"><path d="M20 17A8.5 8.5 0 019.5 6.5a8.5 8.5 0 100 15A8.5 8.5 0 0020 17z" fill="currentColor"/></svg>
+    <button class="tb-icon" id="layoutBtn" title="分屏布局">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M12 4.5v15"/></g></svg>
     </button>
-    <button id="randomBtn" class="tv-buy-btn" title="随机一段开始复盘">随机复盘</button>
-    <button id="customBtn" class="tv-outline-btn" title="自选日期开始复盘">自选复盘</button>
-    <button id="exitBtn" class="tv-txt-btn" title="停止本地服务器并退出">退出</button>
+    <button class="tb-txt tb-txt-sm" id="compareBtn" title="比较品种">
+      <span>Xe/XAU</span>
+      <svg class="chev" viewBox="0 0 8 5"><path d="M0 0l4 5 4-5z" fill="currentColor"/></svg>
+    </button>
+    <button class="tb-icon" id="cmpSymBtn" title="比较/叠加品种">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><circle cx="9" cy="12" r="5.5"/><circle cx="15" cy="12" r="5.5"/></g></svg>
+    </button>
+    <button class="tb-txt" id="intervalBtn" title="区间">
+      <span>1D</span>
+      <svg class="chev" viewBox="0 0 8 5"><path d="M0 0l4 5 4-5z" fill="currentColor"/></svg>
+    </button>
+    <button class="tb-icon" id="clockBtn" title="时钟 / 收盘倒计时">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3.2 2"/></g></svg>
+    </button>
+    <button class="tb-icon" id="settingsBtn" title="设置">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4L18 18M18 6l-1.6 1.6M7.6 16.4L6 18"/></g></svg>
+    </button>
+    <button class="tb-icon" id="fullBtn" title="全屏">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M9 4.5H4.5V9M15 4.5h4.5V9M9 19.5H4.5V15M15 19.5h4.5V15"/></g></svg>
+    </button>
+    <button class="tb-icon" id="shotBtn" title="保存图表截图">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3.5" y="7.5" width="17" height="12" rx="1.5"/><circle cx="12" cy="13.5" r="3.2"/><path d="M9 7.5l1.2-2.2h3.6L15 7.5"/></g></svg>
+    </button>
+    <button class="tb-icon" id="langBtn" title="语言">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.4 2.2 3.6 5 3.6 8s-1.2 5.8-3.6 8c-2.4-2.2-3.6-5-3.6-8S9.6 6.2 12 4z"/></g></svg>
+    </button>
+    <button class="tb-txt" id="tradeBtn" title="交易面板">
+      <span>交易</span>
+      <svg class="chev" viewBox="0 0 8 5"><path d="M0 0l4 5 4-5z" fill="currentColor"/></svg>
+    </button>
+
+    <!-- 下面两个参考截图没有, 但本工具必需: 主题切换 / 退出 -->
+    <div class="tb-sep"></div>
+    <button id="themeBtn" class="tb-icon" title="切换浅色/深色主题">
+      <svg viewBox="0 0 24 24" class="ic-sun"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><g stroke="currentColor" stroke-width="1.5"><path d="M12 2.6v2.4M12 19v2.4M2.6 12H5M19 12h2.4M5.4 5.4l1.7 1.7M16.9 16.9l1.7 1.7M18.6 5.4l-1.7 1.7M7.1 16.9l-1.7 1.7"/></g></svg>
+      <svg viewBox="0 0 24 24" class="ic-moon"><path d="M17 14.5A7.5 7.5 0 019.5 7a7.5 7.5 0 100 15 7.5 7.5 0 007.5-7.5z" fill="currentColor"/></svg>
+    </button>
+    <button id="exitBtn" class="tb-icon" title="停止本地服务器并退出">
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M14 4.5h4.5V19.5H14"/><path d="M4.5 12h9M10.5 8.5L14 12l-3.5 3.5"/></g></svg>
+    </button>
   </div>
 </header>
+
+<!-- 指标下拉菜单 (锚定在顶栏「指标」按钮下方) -->
+<div id="indMenu" class="ind-menu">
+  <label><input type="checkbox" id="indEma" checked><span>EMA 20</span></label>
+  <label><input type="checkbox" id="indBarCount" checked><span>Bar Count</span></label>
+</div>
 
 <!-- ============ 主区 ============ -->
 <main id="main">
 
-  <!-- 左侧竖排工具栏 (TradingView 布局: 绘图工具 + 视图工具) -->
+  <!-- 左侧竖排工具栏 (照 reference/02 顺序) -->
   <aside id="sideToolbar">
     <button data-tool="cursor" class="tool active" title="光标 (Esc)">
       <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M14 3.5v6.5M14 18v6.5M3.5 14H10M18 14h6.5"/></g><circle cx="14" cy="14" r="1.4" fill="currentColor"/></svg>
@@ -74,101 +144,61 @@
     <button data-tool="trend" class="tool" title="趋势线">
       <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M7 21L21 7"/><circle cx="7" cy="21" r="2"/><circle cx="21" cy="7" r="2"/></g></svg>
     </button>
-    <button data-tool="hline" class="tool" title="水平线">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M3.5 14h21"/></g><circle cx="14" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+    <button data-tool="hmlines" class="tool" title="多水平线">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 8h18M6 14h18M6 20h18"/></g><circle cx="4.6" cy="8" r="1.5" fill="currentColor"/><circle cx="4.6" cy="14" r="1.5" fill="currentColor"/><circle cx="4.6" cy="20" r="1.5" fill="currentColor"/></svg>
     </button>
-    <button data-tool="vline" class="tool" title="垂直线">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M14 3.5v21"/></g><circle cx="14" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+    <button data-tool="gannfan" class="tool" title="江恩扇形">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M5 23L23 5M5 23l18 0M5 23L23 14M5 23L14 5"/></g></svg>
     </button>
-    <button data-tool="rect" class="tool" title="矩形">
-      <svg viewBox="0 0 28 28"><rect x="4.5" y="7.5" width="19" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+    <button data-tool="gannbox" class="tool" title="江恩箱">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 22V6h16"/><path d="M6 22L22 6M6 13.6h16M13.6 6v16"/></g></svg>
     </button>
-    <button data-tool="fib" class="tool" title="斐波那契回撤">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6.5 21.5L21.5 6.5" opacity=".5"/><path d="M3.5 7h17M3.5 11.7h14.5M3.5 16.3h12M3.5 21h9.5"/></g></svg>
+    <button data-tool="brush" class="tool" title="画笔">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M5 22c4-1 5-4 4-8s2-7 6-7 3 4 1 6-5 1-5 3 2 3 4 3 4-1 5-3"/></g></svg>
     </button>
     <button data-tool="text" class="tool" title="文字">
       <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 7.5h16M14 7.5V21"/></g></svg>
     </button>
-    <button data-tool="measure" class="tool" title="测量 / 尺子">
+    <button data-tool="emoji" class="tool" title="表情">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><circle cx="14" cy="14" r="9.5"/><path d="M9.5 16.5c1.2 2 2.8 3 4.5 3s3.3-1 4.5-3"/></g><circle cx="10.6" cy="11.4" r="1.2" fill="currentColor"/><circle cx="17.4" cy="11.4" r="1.2" fill="currentColor"/></svg>
+    </button>
+    <div class="tool-sep"></div>
+    <button data-tool="measure" class="tool" title="尺子 (测量)">
       <svg viewBox="0 0 28 28"><g transform="rotate(-45 14 14)" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="4.5" y="10.5" width="19" height="7" rx="1.2"/><path d="M9 10.5v3M13 10.5v4M17 10.5v3"/></g></svg>
+    </button>
+    <button data-tool="zoomin" class="tool" title="放大">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><circle cx="12.5" cy="12.5" r="7.5"/><path d="M18 18l5.5 5.5M9.5 12.5h6M12.5 9.5v6"/></g></svg>
     </button>
     <div class="tool-sep"></div>
     <button data-tool="magnet" class="tool" title="磁吸 (吸附到开高低收)">
       <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M8.5 6v8.5a5.5 5.5 0 0011 0V6"/><path d="M8.5 6h4M15.5 6h4"/></g></svg>
     </button>
-    <button data-tool="hide" class="tool" title="隐藏 / 显示所有绘图">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M2.5 14S6.5 7.5 14 7.5 25.5 14 25.5 14 21.5 20.5 14 20.5 2.5 14 2.5 14z"/><circle cx="14" cy="14" r="3"/></g></svg>
+    <button data-tool="lockdraw" class="tool" title="锁定绘图">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 22l3-1 9-9-2-2-9 9z"/><path d="M15.5 8.5l2 2"/><rect x="16.5" y="15" width="7" height="6" rx="1.2"/><path d="M18.2 15v-1.8a1.8 1.8 0 013.6 0V15"/></g></svg>
     </button>
+    <button data-tool="lock" class="tool" title="锁定所有绘图">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><rect x="7.5" y="12.5" width="13" height="10" rx="1.6"/><path d="M10.5 12.5v-3a3.5 3.5 0 017 0v3"/></g></svg>
+    </button>
+    <button data-tool="hide" class="tool" title="隐藏 / 显示所有绘图">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M4 20.5L13 6.5l6 10"/><circle cx="18.5" cy="19" r="4.5"/><path d="M18.5 16.6v4.8M16.1 19h4.8"/></g></svg>
+    </button>
+    <button data-tool="link" class="tool" title="复制样式到其他绘图">
+      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M11.5 16.5l5-5"/><path d="M14 9.5l1.8-1.8a3.8 3.8 0 015.4 5.4L19.4 15"/><path d="M14 18.5l-1.8 1.8a3.8 3.8 0 01-5.4-5.4L8.6 13"/></g></svg>
+    </button>
+    <div class="tool-sep"></div>
     <button data-tool="trash" class="tool" title="删除所有绘图">
       <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M5.5 8h17M11 8V5.5h6V8M7.5 8l1 15.5h11L20.5 8"/><path d="M12 11.5v8M16 11.5v8"/></g></svg>
-    </button>
-    <div class="tool-sep"></div>
-    <button data-tool="fit" class="tool" title="重置缩放 (显示最近 180 根)">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M10 4.5H4.5V10M18 4.5h5.5V10M10 23.5H4.5V18M18 23.5h5.5V18"/></g></svg>
-    </button>
-    <button data-tool="fitall" class="tool" title="显示全部已播放 K 线">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M4 14h20M8.5 9.5L4 14l4.5 4.5M19.5 9.5L24 14l-4.5 4.5"/></g></svg>
-    </button>
-    <button data-tool="shot" class="tool" title="保存图表截图">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3.5" y="8.5" width="21" height="14.5" rx="2.5"/><circle cx="14" cy="15.5" r="4"/><path d="M10 8.5l1.5-3h5l1.5 3"/></g></svg>
-    </button>
-    <button data-tool="clean" class="tool" title="清除成交标记与交易记录">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M4.5 21.5h19M8.5 18.5l9.5-12 5.5 4.5-9.5 12z"/></g></svg>
-    </button>
-    <div class="tool-sep"></div>
-    <button data-tool="help" class="tool" title="快捷键说明">
-      <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><circle cx="14" cy="14" r="10"/><path d="M11.2 11.2a2.8 2.8 0 115.6 0c0 2-2.8 2.2-2.8 4.4"/></g><circle cx="14" cy="19.6" r="1.1" fill="currentColor"/></svg>
     </button>
   </aside>
 
   <section id="chartWrap">
-    <!-- 收藏的绘图工具横条 (TradingView 顶部工具栏) -->
-    <div id="drawBar">
-      <button data-tool="cursor" class="dbtn active" title="光标 (Esc)">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M14 3.5v6.5M14 18v6.5M3.5 14H10M18 14h6.5"/></g><circle cx="14" cy="14" r="1.4" fill="currentColor"/></svg>
-      </button>
-      <button data-tool="trend" class="dbtn" title="趋势线">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M7 21L21 7"/><circle cx="7" cy="21" r="2"/><circle cx="21" cy="7" r="2"/></g></svg>
-      </button>
-      <button data-tool="hline" class="dbtn" title="水平线">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M3.5 14h21"/></g><circle cx="14" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-      </button>
-      <button data-tool="vline" class="dbtn" title="垂直线">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M14 3.5v21"/></g><circle cx="14" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-      </button>
-      <button data-tool="rect" class="dbtn" title="矩形">
-        <svg viewBox="0 0 28 28"><rect x="4.5" y="7.5" width="19" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-      </button>
-      <button data-tool="fib" class="dbtn" title="斐波那契回撤">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6.5 21.5L21.5 6.5" opacity=".5"/><path d="M3.5 7h17M3.5 11.7h14.5M3.5 16.3h12M3.5 21h9.5"/></g></svg>
-      </button>
-      <button data-tool="text" class="dbtn" title="文字">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 7.5h16M14 7.5V21"/></g></svg>
-      </button>
-      <button data-tool="measure" class="dbtn" title="测量 (尺子)">
-        <svg viewBox="0 0 28 28"><g transform="rotate(-45 14 14)" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="4.5" y="10.5" width="19" height="7" rx="1.2"/><path d="M9 10.5v3M13 10.5v4M17 10.5v3"/></g></svg>
-      </button>
-      <div class="dsep"></div>
-      <button data-tool="magnet" class="dbtn" title="磁吸">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M8.5 6v8.5a5.5 5.5 0 0011 0V6"/><path d="M8.5 6h4M15.5 6h4"/></g></svg>
-      </button>
-      <button data-tool="hide" class="dbtn" title="隐藏/显示所有绘图">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M2.5 14S6.5 7.5 14 7.5 25.5 14 25.5 14 21.5 20.5 14 20.5 2.5 14 2.5 14z"/><circle cx="14" cy="14" r="3"/></g></svg>
-      </button>
-      <button data-tool="trash" class="dbtn" title="删除所有绘图">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M5.5 8h17M11 8V5.5h6V8M7.5 8l1 15.5h11L20.5 8"/><path d="M12 11.5v8M16 11.5v8"/></g></svg>
-      </button>
-      <div class="dsep"></div>
-      <button data-tool="barcount" class="dbtn active" title="Bar Count (当日序号, 每 2 根显示)">
-        <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M4 20h20"/><path d="M8.5 6.5v9M14 6.5v9M19.5 6.5v4"/></g></svg>
-      </button>
-    </div>
-
-    <!-- 图表区 (相对定位容器: 图表 / 绘图层 / 图例 / 回放条) -->
+    <!-- 图表区 (相对定位容器: 图表 / 绘图层 / 图例+收藏条 / 回放条) -->
     <div id="chartArea">
       <div id="chartMain"></div>
       <canvas id="drawLayer"></canvas>
 
+      <!-- 顶部浮层: 图例 (左) + 收藏绘图工具白条 (右), 与截图同一行 -->
+      <div id="topOverlay">
       <!-- TradingView 风格图例 (四行: 品种+OHLC / 卖出-买入 / EMA / Bar Count) -->
       <div id="legend">
         <div class="lg-row lg-head">
@@ -209,6 +239,39 @@
         </div>
       </div>
 
+      <!-- 收藏的绘图工具白条 (照截图: 图例右侧的圆角悬浮条, 带拖动柄) -->
+      <div id="drawBar">
+        <span class="db-grip" title="拖动排序">
+          <svg viewBox="0 0 8 16"><g fill="currentColor"><circle cx="2.2" cy="3" r="1.1"/><circle cx="2.2" cy="8" r="1.1"/><circle cx="2.2" cy="13" r="1.1"/><circle cx="6" cy="3" r="1.1"/><circle cx="6" cy="8" r="1.1"/><circle cx="6" cy="13" r="1.1"/></g></svg>
+        </span>
+        <button data-tool="trend" class="dbtn" title="趋势线">
+          <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M7 21L21 7"/><circle cx="7" cy="21" r="2"/><circle cx="21" cy="7" r="2"/></g></svg>
+        </button>
+        <button data-tool="hline" class="dbtn" title="水平线">
+          <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M3.5 14h21"/></g><circle cx="14" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+        </button>
+        <button data-tool="rect" class="dbtn" title="矩形">
+          <svg viewBox="0 0 28 28"><rect x="4.5" y="7.5" width="19" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+        </button>
+        <button data-tool="text" class="dbtn" title="文字">
+          <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 7.5h16M14 7.5V21"/></g></svg>
+        </button>
+        <button data-tool="measure" class="dbtn" title="尺子">
+          <svg viewBox="0 0 28 28"><g transform="rotate(-45 14 14)" stroke="currentColor" stroke-width="1.5" fill="none"><rect x="4.5" y="10.5" width="19" height="7" rx="1.2"/><path d="M9 10.5v3M13 10.5v4M17 10.5v3"/></g></svg>
+        </button>
+        <div class="dsep"></div>
+        <button data-tool="magnet" class="dbtn" title="磁吸">
+          <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M8.5 6v8.5a5.5 5.5 0 0011 0V6"/><path d="M8.5 6h4M15.5 6h4"/></g></svg>
+        </button>
+        <button data-tool="hide" class="dbtn" title="隐藏/显示所有绘图">
+          <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M2.5 14S6.5 7.5 14 7.5 25.5 14 25.5 14 21.5 20.5 14 20.5 2.5 14 2.5 14z"/><circle cx="14" cy="14" r="3"/></g></svg>
+        </button>
+        <button data-tool="trash" class="dbtn" title="删除所有绘图">
+          <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M5.5 8h17M11 8V5.5h6V8M7.5 8l1 15.5h11L20.5 8"/><path d="M12 11.5v8M16 11.5v8"/></g></svg>
+        </button>
+      </div>
+      </div><!-- /#topOverlay -->
+
       <!-- 右键菜单 (价格行为学的突破单入口) -->
       <div id="ctxMenu" class="ctx-menu">
         <div class="ctx-head" id="ctxHead">--</div>
@@ -220,71 +283,96 @@
         <button data-act="clearBrackets"><span>清除止盈止损</span></button>
       </div>
 
-      <!-- ============ 悬浮回放控制条 (TradingView Bar Replay 样式) ============ -->
+      <!-- ============ 回放控制条 (照截图: 贴时间轴上方的白色方块条) ============ -->
       <div id="replayBar" class="hidden">
         <div class="rb-progress"><i id="rbProgressFill"></i></div>
-        <div class="rb-row">
-          <div class="rb-group">
-            <button id="btnRestart" class="rb-icon" title="回到起点 (R)">
-              <svg viewBox="0 0 28 28"><path d="M7 6v16M22 7L11 14l11 7z" fill="currentColor"/></svg>
-            </button>
-            <button id="btnStepBack" class="rb-icon" title="上一根 (←)">
-              <svg viewBox="0 0 28 28"><path d="M21 7L10 14l11 7z" fill="currentColor"/></svg>
-            </button>
-            <button id="btnPlay" class="rb-icon rb-play" title="播放/暂停 (空格)">
-              <svg viewBox="0 0 28 28" class="ic-play"><path d="M9 5l15 9-15 9z" fill="currentColor"/></svg>
-              <svg viewBox="0 0 28 28" class="ic-pause"><path d="M9 5h4v18H9zM16 5h4v18h-4z" fill="currentColor"/></svg>
-            </button>
-            <button id="btnStepFwd" class="rb-icon" title="下一根 (→)">
-              <svg viewBox="0 0 28 28"><path d="M7 7l11 7-11 7z" fill="currentColor"/></svg>
-            </button>
-            <button id="btnEnd" class="rb-icon" title="跳到数据末尾 (Jump to realtime)">
-              <svg viewBox="0 0 28 28"><path d="M7 7l11 7-11 7z" fill="currentColor"/><path d="M21 6v16" stroke="currentColor" stroke-width="2.4"/></svg>
-            </button>
-          </div>
-
-          <span class="rb-sep"></span>
-
-          <div class="rb-group">
-            <label class="rb-label">Speed</label>
-            <select id="speedSel" class="rb-sel">
-              <option value="0.5">0.5x</option>
-              <option value="1">1x</option>
-              <option value="2" selected>2x</option>
-              <option value="3">3x</option>
-              <option value="5">5x</option>
-              <option value="10">10x</option>
-              <option value="30">30x</option>
-              <option value="60">60x</option>
-            </select>
-          </div>
-
-          <span class="rb-sep"></span>
-
-          <div class="rb-group rb-goto">
-            <label class="rb-label">Go to</label>
-            <input id="gotoInput" type="text" placeholder="2024-03-15 09:35" spellcheck="false">
-            <button id="gotoBtn" class="rb-txt" title="跳转到该美东时间">跳转</button>
-          </div>
-
-          <span class="rb-sep"></span>
-
-          <div class="rb-group">
-            <span class="rb-count">Bar count <b id="barCount">0</b></span>
-            <span class="rb-time" id="replayTime">--</span>
-          </div>
-
-          <span class="rb-sep"></span>
-
-          <button id="btnCloseReplay" class="rb-icon" title="结束本次复盘 (Esc)">
-            <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 8l12 12M20 8L8 20"/></g></svg>
+        <button id="rbPickBtn" class="rb-pick" title="选择随机K线">
+          <svg viewBox="0 0 20 20"><path d="M10 2l1.6 4.4L16 8l-4.4 1.6L10 14l-1.6-4.4L4 8l4.4-1.6z" fill="currentColor"/></svg>
+          <span>选择随机K线</span>
+          <svg class="chev" viewBox="0 0 8 5"><path d="M0 0l4 5 4-5z" fill="currentColor"/></svg>
+        </button>
+        <span class="rb-div"></span>
+        <div class="rb-group">
+          <button id="btnRestart" class="rb-icon" title="回到起点 (R)">
+            <svg viewBox="0 0 28 28"><path d="M7 6v16M22 7L11 14l11 7z" fill="currentColor"/></svg>
+          </button>
+          <button id="btnStepBack" class="rb-icon" title="上一根 (←)">
+            <svg viewBox="0 0 28 28"><path d="M21 7L10 14l11 7z" fill="currentColor"/></svg>
+          </button>
+          <button id="btnPlay" class="rb-icon rb-play" title="播放/暂停 (空格)">
+            <svg viewBox="0 0 28 28" class="ic-play"><path d="M9 5l15 9-15 9z" fill="currentColor"/></svg>
+            <svg viewBox="0 0 28 28" class="ic-pause"><path d="M9 5h4v18H9zM16 5h4v18h-4z" fill="currentColor"/></svg>
+          </button>
+          <button id="btnStepFwd" class="rb-icon" title="下一根 (→)">
+            <svg viewBox="0 0 28 28"><path d="M7 7l11 7-11 7z" fill="currentColor"/></svg>
+          </button>
+          <button id="btnEnd" class="rb-icon" title="跳到数据末尾">
+            <svg viewBox="0 0 28 28"><path d="M7 7l11 7-11 7z" fill="currentColor"/><path d="M21 6v16" stroke="currentColor" stroke-width="2.4"/></svg>
           </button>
         </div>
+        <span class="rb-div"></span>
+        <select id="speedSel" class="rb-sel" title="播放速度">
+          <option value="0.5">0.5x</option>
+          <option value="1">1x</option>
+          <option value="2" selected>2x</option>
+          <option value="3">3x</option>
+          <option value="5">5x</option>
+          <option value="10">10x</option>
+          <option value="30">30x</option>
+        </select>
+        <select id="rbTfSel" class="rb-sel" title="回放周期">
+          <option value="1m">1分</option>
+          <option value="2m">2分</option>
+          <option value="5m" selected>5分</option>
+          <option value="10m">10分</option>
+          <option value="15m">15分</option>
+          <option value="1h">1小时</option>
+          <option value="4h">4小时</option>
+          <option value="1d">天</option>
+          <option value="3d">3天</option>
+          <option value="1w">周</option>
+          <option value="1M">月</option>
+          <option value="12h">12小时</option>
+        </select>
+        <input id="gotoInput" class="rb-date" type="text" placeholder="2024-03-15 09:35" spellcheck="false" title="跳转到该美东时间">
+        <button id="gotoBtn" class="rb-icon rb-go" title="跳转到输入的日期时间">
+          <svg viewBox="0 0 28 28"><path d="M17 6l-8 8 8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <span class="rb-info"><b id="barCount">0</b><i id="replayTime">--</i></span>
+        <button id="btnCloseReplay" class="rb-icon" title="结束本次复盘 (Esc)">
+          <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 8l12 12M20 8L8 20"/></g></svg>
+        </button>
       </div>
     </div>
+
+    <!-- ============ 底部栏: 区间按钮 + 回放交易 / 状态条 ============ -->
+    <footer id="bottomBar">
+      <div class="bb-left" id="rangeGroup">
+        <button data-range="1d">1天</button>
+        <button data-range="5d">5天</button>
+        <button data-range="1M">1个月</button>
+        <button data-range="3M">3个月</button>
+        <button data-range="6M">6个月</button>
+        <button data-range="ytd">YTD</button>
+        <button data-range="1y">1年</button>
+        <button data-range="5y">5年</button>
+        <button data-range="all">全部</button>
+        <span class="bb-div"></span>
+        <button id="replayTradeBtn" class="bb-replay">
+          <svg viewBox="0 0 20 20"><path d="M4 4.5h8.5a2 2 0 012 2v9M4 4.5v11h8.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9.5 8.5l3.5 2.5-3.5 2.5z" fill="currentColor"/></svg>
+          <span>回放交易</span>
+        </button>
+      </div>
+      <div class="bb-right">
+        <span id="statusClock">--:--:--</span>
+        <span id="statusTz">UTC+8</span>
+        <span id="statusSession">RTH</span>
+        <span id="statusAdj">B-ADJ</span>
+      </div>
+    </footer>
   </section>
 
-  <!-- ============ 右侧交易面板 ============ -->
+  <!-- ============ 右侧交易面板 (参考截图没有; 保留) ============ -->
   <aside id="sidePanel">
     <div class="panel">
       <div class="panel-title">下单</div>
@@ -362,6 +450,7 @@
       <div class="date-inputs">
         <select id="modalTf" class="sel">
           <option value="1m">1分钟</option>
+          <option value="2m">2分钟</option>
           <option value="5m" selected>5分钟</option>
           <option value="10m">10分钟</option>
           <option value="15m">15分钟</option>
@@ -370,7 +459,9 @@
           <option value="4h">4小时</option>
           <option value="12h">12小时</option>
           <option value="1d">日线</option>
+          <option value="3d">3天</option>
           <option value="1w">周线</option>
+          <option value="1M">月线</option>
         </select>
         <select id="modalSession" class="sel">
           <option value="eth">ETH 全日 (23小时)</option>

@@ -39,10 +39,10 @@ const OUT = p => __dirname + '/../' + p;
     await page.mouse.click(b.x, b.y); await page.waitForTimeout(120);
   };
 
-  // 趋势线 + 斐波那契 + 尺子
+  // 趋势线 + 矩形 + 尺子 (照 reference/03 的尺子样式)
   await page.click('#drawBar button[data-tool="trend"]');
   await draw2(P(150, 430), P(400, 230));
-  await page.click('#drawBar button[data-tool="fib"]');
+  await page.click('#drawBar button[data-tool="rect"]');
   await draw2(P(440, 210), P(660, 340));
   await page.click('#drawBar button[data-tool="measure"]');
   await draw2(P(180, 500), P(520, 310));

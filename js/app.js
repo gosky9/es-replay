@@ -34,53 +34,90 @@ const App = {
     }
     this.bindUI();
     this.renderTrading();
+    this.startClock();
+  },
+
+  /** 右下角状态条: 本地时间 + 时区 + 时段 + 复权标记 (照截图 22:29:01 UTC+8 RTH B-ADJ) */
+  startClock() {
+    const p = n => String(n).padStart(2, '0');
+    const tz = -new Date().getTimezoneOffset() / 60;
+    const tzTxt = 'UTC' + (tz >= 0 ? '+' : '') + tz;
+    const el = id => document.getElementById(id);
+    if (el('statusTz')) el('statusTz').textContent = tzTxt;
+    const tick = () => {
+      const d = new Date();
+      if (el('statusClock')) el('statusClock').textContent =
+        `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+      if (el('statusSession')) el('statusSession').textContent = this.session === 'rth' ? 'RTH' : 'ETH';
+    };
+    tick();
+    setInterval(tick, 1000);
   },
 
   bindUI() {
     const $ = id => document.getElementById(id);
 
     /* 顶栏 */
-    $('symbolBlock').addEventListener('click', () => {
-      if (this.engine) $('gotoInput').focus();
-      else $('startModal').style.display = '';
-    });
+    $('symbolBlock').addEventListener('click', () => this.openCustomPicker());
     $('tfGroup').addEventListener('click', e => {
       const b = e.target.closest('button[data-tf]'); if (!b) return;
       if (this.engine) this.switchTf(b.dataset.tf);
       else { $('modalTf').value = b.dataset.tf; this.toast('请先开始复盘'); }
     });
-    $('tfMore').addEventListener('change', e => {
-      const tf = e.target.value;
-      e.target.value = '';
-      if (!tf) return;
-      if (this.engine) this.switchTf(tf);
-      else $('modalTf').value = tf;
+    $('tfMoreBtn').addEventListener('click', () => this.notDone('更多周期'));
+    $('indicatorBtn').addEventListener('click', e => {
+      e.stopPropagation();
+      const m = $('indMenu');
+      if (m.classList.contains('open')) { m.classList.remove('open'); return; }
+      const r = $('indicatorBtn').getBoundingClientRect();
+      m.style.left = Math.round(r.left) + 'px';
+      m.style.top = Math.round(r.bottom + 4) + 'px';
+      m.classList.add('open');
     });
-    $('indicatorBtn').addEventListener('click', () => {
-      const on = ChartMgr.emaEnabled;
-      ChartMgr.setEmaEnabled(!on);
-      $('indicatorBtn').classList.toggle('active', !on);
+    $('indMenu').addEventListener('click', e => e.stopPropagation());
+    document.addEventListener('click', () => $('indMenu').classList.remove('open'));
+    $('indEma').addEventListener('change', e => {
+      ChartMgr.setEmaEnabled(e.target.checked);
       if (this.engine) ChartMgr.setData(this.visibleBars(), { preserve: true });
-      this.syncToolUI();
-      this.onLegendIdle();
-      this.toast(!on ? 'EMA20 已开启' : 'EMA20 已关闭');
+      this.syncToolUI(); this.onLegendIdle();
     });
+    $('indBarCount').addEventListener('change', e => {
+      Draw.showBarCount = e.target.checked;
+      Draw.render(); this.syncToolUI();
+    });
+    $('gridBtn').addEventListener('click', () => {
+      this.gridOn = !this.gridOn;
+      ChartMgr.setGrid(this.gridOn);
+      $('gridBtn').classList.toggle('on', this.gridOn);
+      this.toast(this.gridOn ? '网格线: 开' : '网格线: 关');
+    });
+    $('replayPillBtn').addEventListener('click', () => this.startReplay());
+    $('undoBtn').addEventListener('click', () => this.undoDraw());
+    $('redoBtn').addEventListener('click', () => this.redoDraw());
+    $('fullBtn').addEventListener('click', () => {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen().catch(() => this.toast('全屏不可用', true));
+    });
+    $('shotBtn').addEventListener('click', () => {
+      const ok = ChartMgr.screenshot();
+      this.toast(ok ? '截图已保存到下载目录' : '截图失败', !ok);
+    });
+    /* 截图有、但本工具没有对应能力 => 明确提示未实现 */
+    ['chartTypeBtn', 'symAddBtn', 'alertBtn', 'layoutBtn', 'compareBtn', 'cmpSymBtn',
+     'intervalBtn', 'clockBtn', 'settingsBtn', 'langBtn', 'tradeBtn']
+      .forEach(id => { const el = $(id); if (el) el.addEventListener('click', () => this.notDone(el.title || '该功能')); });
     $('sessionSeg').addEventListener('click', e => {
       const b = e.target.closest('button'); if (!b) return;
       $('sessionSeg').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
       if (this.engine) this.switchSession(b.dataset.session);
     });
     $('themeBtn').addEventListener('click', () => this.toggleTheme());
-
-    /* 顶栏右侧 */
-    $('randomBtn').addEventListener('click', () => { this.mode = 'random'; this.startSession(); });
-    $('customBtn').addEventListener('click', () => { this.mode = 'custom'; this.startSession(); });
     $('exitBtn').addEventListener('click', () => this.exitApp());
 
     /* 图例上的按钮 (照参考截图: 卖出 / 买入 / 回放 / EMA 开关) */
     $('lgSellBtn').addEventListener('click', () => this.placeOrder('sell'));
     $('lgBuyBtn').addEventListener('click', () => this.placeOrder('buy'));
-    $('lgReplayBtn').addEventListener('click', () => { this.mode = 'random'; this.startSession(); });
+    $('lgReplayBtn').addEventListener('click', () => this.startReplay());
     $('lgEmaBtn').addEventListener('click', () => {
       ChartMgr.setEmaEnabled(!ChartMgr.emaEnabled);
       if (ChartMgr._lastData) ChartMgr.setData(ChartMgr._lastData, { preserve: true });
@@ -133,6 +170,24 @@ const App = {
     $('gotoBtn').addEventListener('click', () => this.gotoTime());
     $('gotoInput').addEventListener('keydown', e => { if (e.key === 'Enter') this.gotoTime(); });
     $('btnCloseReplay').addEventListener('click', () => this.closeReplay());
+    $('rbPickBtn').addEventListener('click', () => this.startReplay());
+    $('rbTfSel').addEventListener('change', e => {
+      const tf = e.target.value;
+      if (this.engine) this.switchTf(tf);
+      else { this.tf = tf; this.syncTfUI(); }
+    });
+
+    /* 底部: 区间按钮 + 回放交易 */
+    $('rangeGroup').addEventListener('click', e => {
+      const b = e.target.closest('button[data-range]'); if (!b) return;
+      $('rangeGroup').querySelectorAll('button[data-range]').forEach(x => x.classList.toggle('active', x === b));
+      this.applyRange(b.dataset.range);
+    });
+    $('replayTradeBtn').addEventListener('click', () => {
+      const bar = $('replayBar');
+      if (!this.engine) { this.startReplay(); return; }
+      bar.classList.toggle('hidden');
+    });
 
     /* 下单 */
     $('dirSeg').addEventListener('click', e => {
@@ -193,19 +248,30 @@ const App = {
     if (text) document.getElementById('loadingText').textContent = text;
   },
 
-  /* ---------- 工具栏分发 (左侧工具栏 + 顶部收藏横条共用) ---------- */
-  DRAW_TOOLS: ['cursor', 'trend', 'hline', 'vline', 'rect', 'fib', 'text', 'measure'],
+  /* ---------- 工具栏分发 (左侧工具栏 + 顶部收藏条共用) ---------- */
+  DRAW_TOOLS: ['cursor', 'trend', 'hline', 'rect', 'text', 'measure'],
+  /** 截图里有、但本工具还没实现的工具 —— 点击只提示, 不做任何事 */
+  TODO_TOOLS: {
+    hmlines: '多水平线', gannfan: '江恩扇形', gannbox: '江恩箱', brush: '画笔',
+    emoji: '表情', lockdraw: '锁定绘图', lock: '锁定所有绘图', link: '复制样式',
+  },
   TOOL_NAME: {
-    cursor: '光标', trend: '趋势线', hline: '水平线', vline: '垂直线',
-    rect: '矩形', fib: '斐波那契回撤', text: '文字', measure: '测量尺',
+    cursor: '光标', trend: '趋势线', hline: '水平线', rect: '矩形',
+    text: '文字', measure: '尺子',
+  },
+
+  /** 明确告知"该功能还没做", 不伪造行为 */
+  notDone(name) {
+    this.toast(`${name}还没做`, true);
   },
 
   applyTool(tool) {
+    if (this.TODO_TOOLS[tool]) { this.notDone(this.TODO_TOOLS[tool]); return; }
     if (this.DRAW_TOOLS.includes(tool)) {
       if (tool !== 'cursor' && !this.engine) { this.toast('请先开始复盘再使用绘图工具', true); return; }
       Draw.setTool(tool);
       if (tool !== 'cursor') {
-        this.toast(`${this.TOOL_NAME[tool]}: 在图上按住左键拖动 (Esc 取消) · 画完自动回到光标`);
+        this.toast(`${this.TOOL_NAME[tool]}: 点第一点 → 移动 → 点第二点 (Esc 取消) · 画完自动回到光标`);
       }
       this.syncToolUI();
       return;
@@ -220,28 +286,86 @@ const App = {
       this.toast(on ? '已隐藏所有绘图' : '已显示所有绘图');
       this.syncToolUI(); return;
     }
-    if (tool === 'barcount') {
-      const on = Draw.toggleBarCount();
-      this.toast(on ? 'Bar Count 序号: 开' : 'Bar Count 序号: 关');
-      this.syncToolUI(); return;
+    if (tool === 'zoomin') {
+      const r = ChartMgr.visibleRange();
+      if (!r) return;
+      const mid = (r.from + r.to) / 2, half = Math.max(6, (r.to - r.from) / 4);
+      ChartMgr.chart.timeScale().setVisibleLogicalRange({ from: mid - half, to: mid + half });
+      return;
     }
     if (tool === 'trash') {
       const n = Draw.removeAll();
       this.toast(n ? `已删除 ${n} 个绘图` : '当前没有绘图');
       this.syncToolUI(); return;
     }
-    if (tool === 'fit') { ChartMgr.fitRecent(); this.toast('已重置缩放: 显示最近 180 根'); return; }
-    if (tool === 'fitall') { ChartMgr.fitAll(); this.toast('显示全部已播放 K 线'); return; }
-    if (tool === 'shot') {
-      const ok = ChartMgr.screenshot();
-      this.toast(ok ? '截图已保存到下载目录' : '截图失败', !ok); return;
-    }
-    if (tool === 'clean') {
-      Trading.reset(); this.refreshMarkers();
-      this.toast('已清除交易记录与标记'); return;
-    }
-    if (tool === 'help') document.getElementById('helpModal').style.display = 'flex';
   },
+
+  /* ---------- 绘图撤销 / 重做 ---------- */
+  undoDraw() {
+    if (!Draw.undo || !Draw.undo.length) { this.toast('没有可撤销的操作'); return; }
+    Draw.redo.push(Draw.snapshot());
+    Draw.items = Draw.undo.pop();
+    Draw.selected = null; Draw.render(); this.syncToolUI();
+    this.toast('已撤销');
+  },
+
+  redoDraw() {
+    if (!Draw.redo || !Draw.redo.length) { this.toast('没有可重做的操作'); return; }
+    Draw.undo.push(Draw.snapshot());
+    Draw.items = Draw.redo.pop();
+    Draw.selected = null; Draw.render(); this.syncToolUI();
+    this.toast('已重做');
+  },
+
+  /* ---------- 底部区间按钮: 缩放到对应时间跨度 ---------- */
+  applyRange(key) {
+    const bars = this.bars;
+    if (!bars || !bars.length || !this.engine) { this.toast('请先开始复盘', true); return; }
+    const total = this.engine.idx + 1;                  // 已播放到第几根(下标)
+    if (key === 'all') { ChartMgr.fitAll(); return; }
+    const last = bars[total - 1];
+    let fromEpoch = null;
+    const DAY = 86400;
+    if (key === '1d') fromEpoch = last.epoch - DAY;
+    else if (key === '5d') fromEpoch = last.epoch - 5 * DAY;
+    else if (key === '1M') fromEpoch = last.epoch - 30 * DAY;
+    else if (key === '3M') fromEpoch = last.epoch - 91 * DAY;
+    else if (key === '6M') fromEpoch = last.epoch - 182 * DAY;
+    else if (key === '1y') fromEpoch = last.epoch - 365 * DAY;
+    else if (key === '5y') fromEpoch = last.epoch - 365 * 5 * DAY;
+    else if (key === 'ytd') {
+      const p = etParts(last.epoch, last.off);
+      fromEpoch = etWallToEpoch(p.y, 1, 1, 0, 0);
+    }
+    if (fromEpoch == null) return;
+    let i = 0;
+    for (let k = total - 1; k >= 0; k--) { if (bars[k].epoch >= fromEpoch) i = k; else break; }
+    ChartMgr.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, i - 0.5), to: total + 5 });
+  },
+
+  /* ---------- 打开「选择随机K线」弹窗 (顶栏回放胶囊 / 图例◀◀ / 底部回放交易 共用) ---------- */
+  startReplay() {
+    const $ = id => document.getElementById(id);
+    $('modeSeg').querySelectorAll('button').forEach(x => x.classList.toggle('active', x.dataset.mode === 'random'));
+    this.mode = 'random';
+    $('customDateRow').style.display = 'none';
+    $('modalSession').value = this.session;
+    $('modalTf').value = this.tf;
+    $('startModal').style.display = 'flex';
+    $('replayBar').classList.remove('hidden');
+  },
+
+  /** 打开「自选日期」弹窗 */
+  openCustomPicker() {
+    const $ = id => document.getElementById(id);
+    $('modeSeg').querySelectorAll('button').forEach(x => x.classList.toggle('active', x.dataset.mode === 'custom'));
+    this.mode = 'custom';
+    $('customDateRow').style.display = '';
+    $('modalSession').value = this.session;
+    $('modalTf').value = this.tf;
+    $('startModal').style.display = 'flex';
+  },
+
 
   /** 两处工具栏的 active 状态 / 图例指标行 统一同步 */
   syncToolUI() {
@@ -251,7 +375,6 @@ const App = {
         let on = false;
         if (t === 'magnet') on = !!Draw.magnet;
         else if (t === 'hide') on = !!Draw.hidden;
-        else if (t === 'barcount') on = !!Draw.showBarCount;
         else if (this.DRAW_TOOLS.includes(t)) on = (Draw.tool === t);
         b.classList.toggle('active', on);
       });
@@ -259,6 +382,10 @@ const App = {
     if (emaRow) emaRow.classList.toggle('hidden-row', !ChartMgr.emaEnabled);
     const barRow = document.getElementById('lgBarRow');
     if (barRow) barRow.classList.toggle('hidden-row', !Draw.showBarCount);
+    const ce = document.getElementById('indEma');
+    if (ce) ce.checked = !!ChartMgr.emaEnabled;
+    const cb = document.getElementById('indBarCount');
+    if (cb) cb.checked = !!Draw.showBarCount;
   },
 
   /** 图例两个指标行: EMA 值 / 当前 bar 的当日序号 */
@@ -333,6 +460,7 @@ const App = {
 
   /** 周期显示名: 分钟只写数字(截图里是 "· 5 ·"), 其余给中文单位 */
   tfLabel() {
+    if (this.tf === '1M') return '月';
     const n = this.tf.replace(/[mhdw]$/, '');
     if (this.tf.endsWith('m')) return n;
     if (this.tf.endsWith('h')) return `${n}小时`;
@@ -344,8 +472,10 @@ const App = {
     document.querySelectorAll('#tfGroup button[data-tf]').forEach(b =>
       b.classList.toggle('active', b.dataset.tf === this.tf));
     document.getElementById('lgTf').textContent = this.tfLabel();
-    document.getElementById('symMeta').textContent = `· ${this.tf} · CME`;
     document.getElementById('modalTf').value = this.tf;
+    const rb = document.getElementById('rbTfSel');
+    if (rb) rb.value = this.tf;
+    document.title = `ES1! · ${this.tfLabel()} · CME`;
   },
 
   async loadAndBuild(fresh) {
@@ -360,7 +490,7 @@ const App = {
       }
       const d = w.data;
       const n = w.indices.length;
-      const isDay = (this.tf === '1d' || this.tf === '1w');
+      const isDay = (this.tf === '1d' || this.tf === '3d' || this.tf === '1w' || this.tf === '1M');
       const bars = new Array(n);
       const k = 2 / 21;                     // EMA20 因果计算
       const tfMin = TF_MINUTES[this.tf] || 1;
