@@ -566,6 +566,128 @@ const waitLoaded = page => page.waitForFunction(
   }));
   check('未实现工具点击提示"还没做"', /还没做/.test(ph.toast) && ph.tool === 'cursor', JSON.stringify(ph));
 
+  /* ===== 本轮 7 条要求 ===== */
+  // 右侧留出空白区: 视窗 [n-60, n+40]
+  await page.evaluate(() => {
+    const n = ChartMgr._lastData.length;
+    ChartMgr.chart.timeScale().setVisibleLogicalRange({ from: n - 60, to: n + 40 });
+  });
+  await page.waitForTimeout(250);
+  const cvGeo = await page.evaluate(() => {
+    const a = document.getElementById('chartArea').getBoundingClientRect();
+    const n = ChartMgr._lastData.length;
+    const ts = ChartMgr.chart.timeScale();
+    return {
+      left: a.left, top: a.top,
+      xLast: ts.logicalToCoordinate(n - 1), xBlank: ts.logicalToCoordinate(n + 26),
+      y: Math.round(Draw._priceAreaHeight() * 0.5),
+      lastT: ChartMgr._lastData[n - 1].t,
+    };
+  });
+
+  /* ① 尺子/绘图在右侧空白区也有效 */
+  await page.evaluate(() => App.applyTool('measure'));
+  await page.mouse.move(cvGeo.left + cvGeo.xLast - 160, cvGeo.top + cvGeo.y - 50);
+  await page.mouse.down(); await page.mouse.up();
+  await page.mouse.move(cvGeo.left + cvGeo.xBlank, cvGeo.top + cvGeo.y + 50, { steps: 5 });
+  await page.mouse.down(); await page.mouse.up();
+  await page.waitForTimeout(150);
+  const blank = await page.evaluate(() => {
+    const it = Draw.items.find(i => i.type === 'measure');
+    return it ? { bT: it.b.t, xb: Draw.xOf(it.b.t) } : null;
+  });
+  check('尺子在右侧空白区也能落点并反算坐标',
+        !!blank && blank.bT > cvGeo.lastT && Math.abs(blank.xb - cvGeo.xBlank) <= 6,
+        blank ? `bT>lastT=${blank.bT > cvGeo.lastT} Δx=${Math.round(blank.xb - cvGeo.xBlank)}` : '未生成');
+
+  /* ② 趋势线 Shift 强制水平 */
+  await page.evaluate(() => { Draw.removeAll(); App.applyTool('trend'); });
+  await page.mouse.move(cvGeo.left + 280, cvGeo.top + 200);
+  await page.mouse.down(); await page.mouse.up();
+  await page.keyboard.down('Shift');
+  await page.mouse.move(cvGeo.left + 560, cvGeo.top + 320, { steps: 6 });
+  await page.mouse.down(); await page.mouse.up();
+  await page.keyboard.up('Shift');
+  await page.waitForTimeout(150);
+  const shiftD = await page.evaluate(() => {
+    const it = Draw.items.find(i => i.type === 'trend');
+    return it ? Math.abs(it.a.p - it.b.p) : null;
+  });
+  check('趋势线按住 Shift 强制水平', shiftD != null && shiftD < 1e-9, String(shiftD));
+
+  /* ③ 画到一半右键 = 取消划线, 不弹挂单菜单 */
+  await page.evaluate(() => { Draw.removeAll(); App.applyTool('measure'); });
+  await page.mouse.move(cvGeo.left + 380, cvGeo.top + 260);
+  await page.mouse.down(); await page.mouse.up();
+  const hadDraft = await page.evaluate(() => !!Draw.draft);
+  await page.mouse.click(cvGeo.left + 500, cvGeo.top + 300, { button: 'right' });
+  await page.waitForTimeout(150);
+  const rc = await page.evaluate(() => ({
+    draft: !!Draw.draft, tool: Draw.tool,
+    menu: getComputedStyle(document.getElementById('ctxMenu')).display,
+  }));
+  check('画到一半右键优先取消划线(不弹挂单菜单)',
+        hadDraft && !rc.draft && rc.tool === 'cursor' && rc.menu === 'none', JSON.stringify(rc));
+
+  /* ④ "还没做" 提示贴按钮 */
+  const gb = await page.locator('#sideToolbar button[data-tool="gannfan"]').boundingBox();
+  await page.click('#sideToolbar button[data-tool="gannfan"]');
+  await page.waitForTimeout(180);
+  const tPos = await page.evaluate(() => {
+    const r = document.getElementById('toast').getBoundingClientRect();
+    return { cx: r.left + r.width / 2, top: r.top };
+  });
+  check('"还没做"提示贴在所点按钮附近(不再固定左下角)',
+        Math.abs(tPos.cx - (gb.x + gb.width / 2)) < 60 && Math.abs(tPos.top - (gb.y + gb.height)) < 60,
+        `toast=${Math.round(tPos.cx)},${Math.round(tPos.top)} btn=${Math.round(gb.x + gb.width / 2)},${Math.round(gb.y + gb.height)}`);
+
+  /* ⑤ 收藏工具条可拖动 */
+  const dbBefore = await page.locator('#drawBar').boundingBox();
+  const gp = await page.locator('#drawBar .db-grip').boundingBox();
+  await page.mouse.move(gp.x + gp.width / 2, gp.y + gp.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(gp.x + 180, gp.y + 130, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+  const dbAfter = await page.locator('#drawBar').boundingBox();
+  check('收藏工具条可拖动移动',
+        Math.abs(dbAfter.x - dbBefore.x) > 100 && Math.abs(dbAfter.y - dbBefore.y) > 70,
+        `Δ=${Math.round(dbAfter.x - dbBefore.x)},${Math.round(dbAfter.y - dbBefore.y)}`);
+  await page.evaluate(() => {
+    const b = document.getElementById('drawBar');
+    b.style.left = '0px'; b.style.top = '0px';
+    localStorage.removeItem('es_replay_drawbar');
+  });
+
+  /* ⑥ 绘图可互相层叠: 后画在上, 点中置顶 */
+  const zBefore = await page.evaluate(() => {
+    Draw.removeAll(); Draw.setTool('cursor');
+    const bars = ChartMgr._lastData, b = bars[bars.length - 25];
+    Draw.addItem({ type: 'hline', a: { t: b.t, p: b.c }, b: { t: b.t, p: b.c } });
+    Draw.addItem({ type: 'hline', a: { t: b.t, p: b.c + 12 }, b: { t: b.t, p: b.c + 12 } });
+    Draw.render();
+    return { z: Draw.items.map(i => i.z), y: Draw.yOf(b.c) };
+  });
+  await page.mouse.click(cvGeo.left + 420, cvGeo.top + zBefore.y);
+  await page.waitForTimeout(150);
+  const zAfter = await page.evaluate(() => Draw.items.map(i => i.z));
+  check('绘图可互相层叠(后画在上 / 点中置顶)',
+        zBefore.z[1] > zBefore.z[0] && zAfter[0] > zAfter[1],
+        JSON.stringify(zBefore.z) + ' → ' + JSON.stringify(zAfter));
+
+  /* ⑦ 斐波那契照截图: 1/0/-1/-2 级别 + 千分位价格标签 */
+  const fibInfo = await page.evaluate(() => {
+    Draw.removeAll();
+    const it = Draw.addItem({ type: 'fib', a: { t: ChartMgr._lastData[5].t, p: 100 },
+                              b: { t: ChartMgr._lastData[20].t, p: 96 } });
+    Draw.render();
+    return { levels: (it.levels || Draw.FIB).slice(), fmt: Draw._fmtPrice(7151.25) };
+  });
+  check('斐波那契照截图(级别 1/0/-1/-2, 价格千分位)',
+        JSON.stringify(fibInfo.levels) === '[1,0,-1,-2]' && fibInfo.fmt === '7,151.25',
+        JSON.stringify(fibInfo));
+  await page.evaluate(() => Draw.clearAll());
+
   // 撤销 / 重做
   await page.click('#drawBar button[data-tool="hline"]');
   const boxU = await page.locator('#chartMain').boundingBox();

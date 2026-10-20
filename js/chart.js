@@ -293,7 +293,7 @@ const ChartMgr = {
     if (price != null) {
       this.posLine = this.candle.createPriceLine({
         price, color: '#2962ff', lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '持仓',
+        lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: '',
       });
     }
   },

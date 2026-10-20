@@ -35,6 +35,8 @@ const App = {
     this.bindUI();
     this.renderTrading();
     this.startClock();
+    // 提示气泡要贴着鼠标走, 记一下最后位置
+    window.addEventListener('mousemove', e => { this._mx = e.clientX; this._my = e.clientY; }, { passive: true });
   },
 
   /** 右下角状态条: 本地时间 + 时区 + 时段 + 复权标记 (照截图 22:29:01 UTC+8 RTH B-ADJ) */
@@ -64,7 +66,7 @@ const App = {
       if (this.engine) this.switchTf(b.dataset.tf);
       else { $('modalTf').value = b.dataset.tf; this.toast('请先开始复盘'); }
     });
-    $('tfMoreBtn').addEventListener('click', () => this.notDone('更多周期'));
+    $('tfMoreBtn').addEventListener('click', e => this.notDone('更多周期', e.currentTarget));
     $('indicatorBtn').addEventListener('click', e => {
       e.stopPropagation();
       const m = $('indMenu');
@@ -105,7 +107,7 @@ const App = {
     /* 截图有、但本工具没有对应能力 => 明确提示未实现 */
     ['chartTypeBtn', 'symAddBtn', 'alertBtn', 'layoutBtn', 'compareBtn', 'cmpSymBtn',
      'intervalBtn', 'clockBtn', 'settingsBtn', 'langBtn', 'tradeBtn']
-      .forEach(id => { const el = $(id); if (el) el.addEventListener('click', () => this.notDone(el.title || '该功能')); });
+      .forEach(id => { const el = $(id); if (el) el.addEventListener('click', () => this.notDone(el.title || '该功能', el)); });
     $('sessionSeg').addEventListener('click', e => {
       const b = e.target.closest('button'); if (!b) return;
       $('sessionSeg').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
@@ -128,11 +130,13 @@ const App = {
     /* 左侧工具栏 + 顶部收藏工具横条 (共用一套分发, 两处 active 状态同步) */
     const onToolClick = e => {
       const b = e.target.closest('button[data-tool]'); if (!b) return;
-      this.applyTool(b.dataset.tool);
+      this.applyTool(b.dataset.tool, b);
     };
     $('sideToolbar').addEventListener('click', onToolClick);
     $('drawBar').addEventListener('click', onToolClick);
     this.syncToolUI();
+    this.bindToolTips();
+    this.bindDrawBarDrag();
 
     /* 右键菜单: 突破单 / 平仓 / 撤销 */
     $('chartArea').addEventListener('contextmenu', e => this.openContextMenu(e));
@@ -204,7 +208,7 @@ const App = {
     $('btnBuy').addEventListener('click', () => this.placeOrder('buy'));
     $('btnSell').addEventListener('click', () => this.placeOrder('sell'));
     $('btnClose').addEventListener('click', () => this.closePosition());
-    $('btnResetTrades').addEventListener('click', () => { Trading.reset(); this.refreshMarkers(); });
+    $('btnResetTrades').addEventListener('click', () => { Trading.reset(); ChartMgr.setPosLine(null); this.renderTrading(); this.refreshMarkers(); });
 
     /* 键盘 */
     document.addEventListener('keydown', e => {
@@ -234,11 +238,104 @@ const App = {
     });
   },
 
-  toast(msg, warn) {
+  /** 提示气泡: 就近显示 —— 传了按钮就贴着按钮, 否则跟着鼠标走 (不再固定在左下角) */
+  /* ---------- 工具按钮的深色悬浮提示 (照 reference/07 截图) ---------- */
+  bindToolTips() {
+    const tip = document.getElementById('tip');
+    if (!tip) return;
+    // 原生 title 换成自绘提示, 免得两套提示叠在一起
+    document.querySelectorAll('#sideToolbar [title], #drawBar [title]').forEach(el => {
+      el.dataset.tip = el.getAttribute('title');
+      el.removeAttribute('title');
+    });
+    const hide = () => { tip.style.opacity = '0'; };
+    document.addEventListener('mouseover', e => {
+      const el = e.target.closest('#sideToolbar [data-tip], #drawBar [data-tip]');
+      if (!el) { hide(); return; }
+      tip.textContent = el.dataset.tip;
+      tip.classList.add('show');
+      const r = el.getBoundingClientRect();
+      const side = el.closest('#sideToolbar') ? 'right' : 'top';
+      tip.classList.toggle('right', side === 'right');
+      tip.classList.toggle('top', side === 'top');
+      const tw = tip.offsetWidth, th = tip.offsetHeight;
+      let L, T;
+      if (side === 'right') { L = r.right + 9; T = r.top + r.height / 2 - th / 2; }
+      else { L = r.left + r.width / 2 - tw / 2; T = r.top - th - 8; }
+      L = Math.max(4, Math.min(L, window.innerWidth - tw - 4));
+      T = Math.max(4, T);
+      tip.style.left = Math.round(L) + 'px';
+      tip.style.top = Math.round(T) + 'px';
+    });
+    document.addEventListener('mouseout', e => {
+      if (e.target.closest && e.target.closest('#sideToolbar [data-tip], #drawBar [data-tip]')) hide();
+    });
+  },
+
+  /* ---------- 收藏工具条: 可拖动移动 (照 reference/07、08) ---------- */
+  bindDrawBarDrag() {
+    const bar = document.getElementById('drawBar');
+    const grip = bar && bar.querySelector('.db-grip');
+    if (!bar || !grip) return;
+    try {
+      const p = JSON.parse(localStorage.getItem('es_replay_drawbar') || 'null');
+      if (p && typeof p.left === 'number') {
+        bar.style.left = p.left + 'px';
+        bar.style.top = p.top + 'px';
+      }
+    } catch (e) { /* 本地记录损坏时忽略 */ }
+
+    grip.addEventListener('mousedown', e => {
+      if (e.button !== 0) return;
+      e.preventDefault(); e.stopPropagation();
+      const l0 = parseFloat(bar.style.left) || 0;
+      const t0 = parseFloat(bar.style.top) || 0;
+      const sx = e.clientX, sy = e.clientY;
+      bar.classList.add('dragging');
+      const move = ev => {
+        bar.style.left = Math.round(l0 + ev.clientX - sx) + 'px';
+        bar.style.top = Math.round(t0 + ev.clientY - sy) + 'px';
+      };
+      const up = () => {
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        bar.classList.remove('dragging');
+        try {
+          localStorage.setItem('es_replay_drawbar', JSON.stringify({
+            left: parseFloat(bar.style.left) || 0, top: parseFloat(bar.style.top) || 0,
+          }));
+        } catch (err) { /* 隐私模式下忽略 */ }
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+  },
+
+  toast(msg, warn, anchor) {
     const t = document.getElementById('toast');
     t.textContent = msg;
     t.classList.toggle('warn', !!warn);
+    // 先归零再量尺寸, 避免上一帧的定位影响本次居中
+    t.style.left = '-9999px'; t.style.top = '0px';
     t.classList.add('show');
+    let x = null, y = null;
+    if (anchor && typeof anchor.getBoundingClientRect === 'function') {
+      const r = anchor.getBoundingClientRect();
+      x = r.left + r.width / 2; y = r.bottom + 10;
+    } else if (anchor && typeof anchor.x === 'number') {
+      x = anchor.x; y = anchor.y + 16;
+    } else if (this._mx != null) {
+      x = this._mx; y = this._my + 18;
+    }
+    if (x == null) { x = window.innerWidth / 2; y = window.innerHeight - 120; }
+    const w = t.offsetWidth, h = t.offsetHeight;
+    let L = x - w / 2;
+    let T = y;
+    L = Math.max(8, Math.min(L, window.innerWidth - w - 8));
+    if (T + h > window.innerHeight - 8) T = y - h - 36;    // 下方放不下就翻上去
+    T = Math.max(8, T);
+    t.style.left = Math.round(L) + 'px';
+    t.style.top = Math.round(T) + 'px';
     clearTimeout(this._toastTimer);
     this._toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
   },
@@ -260,13 +357,13 @@ const App = {
     text: '文字', measure: '尺子',
   },
 
-  /** 明确告知"该功能还没做", 不伪造行为 */
-  notDone(name) {
-    this.toast(`${name}还没做`, true);
+  /** 明确告知"该功能还没做", 不伪造行为; 提示贴在所点的按钮旁边 */
+  notDone(name, el) {
+    this.toast(`${name}还没做`, true, el || null);
   },
 
-  applyTool(tool) {
-    if (this.TODO_TOOLS[tool]) { this.notDone(this.TODO_TOOLS[tool]); return; }
+  applyTool(tool, el) {
+    if (this.TODO_TOOLS[tool]) { this.notDone(this.TODO_TOOLS[tool], el); return; }
     if (this.DRAW_TOOLS.includes(tool)) {
       if (tool !== 'cursor' && !this.engine) { this.toast('请先开始复盘再使用绘图工具', true); return; }
       Draw.setTool(tool);
@@ -756,6 +853,15 @@ const App = {
 
   /* ---------- 右键菜单 (突破单 / 平仓 / 撤销) ---------- */
   openContextMenu(e) {
+    // 画到一半点右键 => 优先取消当前绘制, 不弹挂单菜单
+    if (Draw.draft || Draw.tool !== 'cursor') {
+      e.preventDefault(); e.stopPropagation();
+      const wasDraft = !!Draw.draft;
+      Draw.cancel();
+      this.syncToolUI();
+      this.toast(wasDraft ? '已取消本次绘制' : '已退出绘图工具', false, { x: e.clientX, y: e.clientY });
+      return;
+    }
     if (!this.engine) return;
     const area = document.getElementById('chartArea');
     const rect = area.getBoundingClientRect();

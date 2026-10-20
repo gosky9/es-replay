@@ -430,13 +430,27 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
 
 /* ============ Toast ============ */
 .toast {
-  position: fixed; bottom: 62px; left: 62px;
+  position: fixed; left: 0; top: 0;
   background: var(--bg-panel); border: 1px solid var(--border); color: var(--text);
-  padding: 9px 18px; border-radius: 6px; font-size: 13px; z-index: 200;
-  opacity: 0; pointer-events: none; transition: opacity .25s; box-shadow: var(--shadow);
+  padding: 7px 14px; border-radius: 6px; font-size: 12.5px; z-index: 200;
+  opacity: 0; pointer-events: none; transition: opacity .2s; box-shadow: var(--shadow);
+  max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .toast.show { opacity: 1; }
 .toast.warn { border-color: var(--warn); }
+
+/* 工具按钮的深色悬浮提示 (照 reference/07) */
+#tip {
+  position: fixed; left: 0; top: 0; z-index: 300;
+  background: #1e222d; color: #fff; font-size: 12px; line-height: 1;
+  padding: 6px 9px; border-radius: 4px; white-space: nowrap;
+  opacity: 0; pointer-events: none; transition: opacity .12s;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .22);
+}
+#tip.show { opacity: 1; }
+#tip::after { content: ''; position: absolute; border: 5px solid transparent; }
+#tip.top::after { left: 50%; margin-left: -5px; bottom: -10px; border-top-color: #1e222d; }
+#tip.right::after { top: 50%; margin-top: -5px; left: -10px; border-right-color: #1e222d; }
 
 /* ================================================================
    2.0 — 照 reference/02 截图重建的顶栏 / 收藏条 / 回放条 / 底部栏
@@ -525,8 +539,9 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
 #topOverlay > * { pointer-events: auto; }
 #topOverlay #legend { position: static; }
 
-/* 收藏白条: 圆角悬浮, 不再是通栏 */
+/* 收藏白条: 圆角悬浮, 不再是通栏; 可按住左侧六点拖动到任意位置 */
 #drawBar {
+  position: relative; left: 0; top: 0;
   display: flex; align-items: center; gap: 1px; flex: none;
   height: 26px; padding: 0 5px 0 2px;
   background: var(--bg-panel);
@@ -535,10 +550,12 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
   box-shadow: 0 1px 4px rgba(19,23,34,.10);
   overflow: hidden;
 }
+#drawBar.dragging { box-shadow: 0 4px 14px rgba(19,23,34,.20); cursor: grabbing; }
 .db-grip {
   width: 12px; height: 20px; display: inline-flex; align-items: center;
   justify-content: center; color: var(--border-strong); cursor: grab; flex: none;
 }
+#drawBar.dragging .db-grip { cursor: grabbing; }
 .db-grip svg { width: 8px; height: 14px; }
 .dbtn { width: 24px; height: 22px; border-radius: 4px; }
 .dbtn svg { width: 17px; height: 17px; }
