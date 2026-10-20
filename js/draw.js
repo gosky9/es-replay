@@ -476,13 +476,14 @@ const Draw = {
     const yMax = this._priceAreaHeight();
     const bg = ChartMgr.themeColors().bg;
     ctx.save();
-    ctx.font = '500 8px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+    ctx.font = '500 9px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     ctx.lineJoin = 'round';
     ctx.lineWidth = 3;
     ctx.strokeStyle = bg;                  // 主题色描边, 数字压在 K 线上也能看清
-    ctx.fillStyle = this.alpha(ChartMgr.themeColors().text, 0.74);   // 黑白盘面用墨色, 不引入额外色相
+    // 参考截图中 Bar Count 序号是橙色 (TradingView 默认), 与黑白盘面不冲突
+    ctx.fillStyle = ChartMgr.theme === 'dark' ? '#ffab40' : '#ff9800';
     for (let i = from; i <= to; i += 1) {
       const b = bars[i];
       const n = b && b.dayNo ? b.dayNo : 0;

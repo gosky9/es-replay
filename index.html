@@ -169,29 +169,43 @@
       <div id="chartMain"></div>
       <canvas id="drawLayer"></canvas>
 
-      <!-- TradingView 风格图例 -->
+      <!-- TradingView 风格图例 (四行: 品种+OHLC / 卖出-买入 / EMA / Bar Count) -->
       <div id="legend">
-        <div class="lg-row">
-          <span class="lg-sym">ES1!</span>
-          <span class="lg-tf" id="lgTf">1m</span>
-          <span class="lg-exch">CME</span>
+        <div class="lg-row lg-head">
+          <span class="lg-badge">500</span>
+          <span class="lg-name">标普500 E-mini期货 · <span id="lgTf">5</span> · CME</span>
+          <svg class="lg-flag" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h1v10H2z" fill="currentColor"/><path d="M3 1.6h6.2L7.4 3.9l1.8 2.3H3z" fill="currentColor"/></svg>
+          <button class="lg-replay" id="lgReplayBtn" title="回放 (选择随机K线)">
+            <svg viewBox="0 0 16 16"><path d="M7.2 4L3.6 8l3.6 4zM12.4 4L8.8 8l3.6 4z" fill="currentColor"/></svg>
+          </button>
+          <span class="lg-ohlc">
+            <span>开=<i id="lgO">–</i></span>
+            <span>高=<i id="lgH">–</i></span>
+            <span>低=<i id="lgL">–</i></span>
+            <span>收=<i id="lgC">–</i></span>
+            <i id="lgChg"></i>
+          </span>
         </div>
-        <div class="lg-row lg-ohlc">
-          <span><b>O</b><i id="lgO">–</i></span>
-          <span><b>H</b><i id="lgH">–</i></span>
-          <span><b>L</b><i id="lgL">–</i></span>
-          <span><b>C</b><i id="lgC">–</i></span>
-          <span id="lgChg"></span>
+
+        <div class="lg-row lg-btns">
+          <button class="lg-price sell" id="lgSellBtn" title="市价卖出 (S)">
+            <b id="lgSell">–</b><span>卖出</span>
+          </button>
+          <span class="lg-mid" id="lgMid">0.00</span>
+          <button class="lg-price buy" id="lgBuyBtn" title="市价买入 (B)">
+            <b id="lgBuy">–</b><span>买入</span>
+          </button>
         </div>
-        <div class="lg-row lg-ohlc">
-          <span class="lg-vol" id="lgVol"></span>
-          <span class="lg-pos" id="lgPos"></span>
-        </div>
+
         <div class="lg-row lg-ind" id="lgEmaRow">
-          <span><b>EMA</b><i id="lgEma">–</i></span>
+          <span class="lg-ind-name">EMA</span>
+          <button class="lg-rot" id="lgEmaBtn" title="切换 EMA 显示">⟳</button>
+          <i id="lgEma">–</i>
         </div>
+
         <div class="lg-row lg-ind" id="lgBarRow">
-          <span><b>Bar Count</b><i id="lgBarIdx">–</i></span>
+          <span class="lg-ind-name">Bar Count</span>
+          <i id="lgBarIdx">–</i>
         </div>
       </div>
 

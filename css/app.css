@@ -211,27 +211,60 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
 .ctx-menu button em { font-style: normal; color: var(--text-dim); font-size: 11px; }
 .ctx-menu .ctx-sep { height: 1px; background: var(--border); margin: 4px 0; }
 
-/* ============ 图例 (TradingView 左上角) ============ */
+/* ============ 图例 (TradingView 左上角, 四行) ============ */
 #legend {
-  position: absolute; top: 8px; left: 12px; z-index: 12;
-  display: flex; flex-direction: column; gap: 1px;
-  font-size: 12px; pointer-events: none; line-height: 1.35;
+  position: absolute; top: 8px; left: 10px; z-index: 12;
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 12px; pointer-events: none; line-height: 1.3;
 }
-.lg-row { display: flex; align-items: baseline; gap: 8px; }
-.lg-sym { font-weight: 700; font-size: 14px; color: var(--text); }
-.lg-tf { color: var(--text-dim); font-size: 12px; }
-.lg-exch { color: var(--text-dim); font-size: 11px; }
-.lg-ohlc { color: var(--text-dim); gap: 10px; }
-.lg-ohlc b { font-weight: 400; color: var(--text-dim); margin-right: 2px; }
+#legend button { pointer-events: auto; }
+.lg-row { display: flex; align-items: center; gap: 7px; }
+
+/* 第 1 行: 500 徽标 + 品种名 + 旗 + 回放 + 开高低收 */
+.lg-head { gap: 6px; }
+.lg-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 14px; padding: 0 3px; border-radius: 7px;
+  background: var(--up); color: #fff; font-size: 9px; font-weight: 700; letter-spacing: .2px;
+}
+.lg-name { color: var(--text); font-size: 12px; }
+.lg-flag { width: 11px; height: 11px; color: #f23645; flex: none; }
+.lg-replay {
+  width: 16px; height: 16px; padding: 0; border: none; border-radius: 50%;
+  background: #2962ff; color: #fff; display: inline-flex; align-items: center;
+  justify-content: center; cursor: pointer; flex: none;
+}
+.lg-replay svg { width: 11px; height: 11px; }
+.lg-replay:hover { filter: brightness(1.1); }
+.lg-ohlc { display: inline-flex; gap: 9px; margin-left: 6px; color: var(--text-dim); font-size: 11.5px; }
 .lg-ohlc i { font-style: normal; color: var(--text); font-variant-numeric: tabular-nums; }
-#lgChg { font-weight: 600; font-variant-numeric: tabular-nums; }
-.lg-vol { color: var(--text-dim); }
-.lg-vol b { color: var(--text); font-weight: 400; }
-.lg-pos { color: var(--accent); font-weight: 600; }
-.lg-ind { color: var(--text-dim); font-size: 11px; }
-.lg-ind b { color: var(--text-dim); font-weight: 400; margin-right: 4px; }
+#lgChg { font-style: normal; font-variant-numeric: tabular-nums; }
+
+/* 第 2 行: 卖出 / 数量 / 买入 */
+.lg-btns { gap: 8px; margin-top: 2px; }
+.lg-price {
+  display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 2px 10px; border: none; border-radius: 4px; cursor: pointer;
+  color: #fff; font-family: inherit; line-height: 1.15;
+}
+.lg-price b { font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.lg-price span { font-size: 10px; opacity: .95; }
+.lg-price.sell { background: var(--up); }
+.lg-price.buy { background: #2962ff; }
+.lg-price:hover { filter: brightness(1.08); }
+.lg-mid { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; min-width: 22px; text-align: center; }
+.lg-pos { color: var(--accent); font-weight: 600; margin-left: 6px; }
+
+/* 第 3/4 行: 指标 */
+.lg-ind { color: var(--text-dim); font-size: 11.5px; gap: 5px; margin-top: 1px; }
+.lg-ind-name { color: var(--text-dim); }
 .lg-ind i { font-style: normal; color: var(--text); font-variant-numeric: tabular-nums; }
 .lg-ind.hidden-row { display: none; }
+.lg-rot {
+  width: 14px; height: 14px; padding: 0; border: none; background: transparent;
+  color: #8b5cf6; font-size: 13px; line-height: 1; cursor: pointer; border-radius: 50%;
+}
+.lg-rot:hover { background: var(--bg-hover); }
 
 /* ============ 悬浮回放控制条 (Bar Replay) ============ */
 #replayBar {

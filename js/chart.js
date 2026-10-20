@@ -1,6 +1,6 @@
 /* ============ chart.js — lightweight-charts v5 封装 (TradingView 风格) ============ */
 const ChartMgr = {
-  chart: null, candle: null, vol: null, ema: null, volPane: null, markersPlugin: null,
+  chart: null, candle: null, ema: null, markersPlugin: null,
   priceLine: null, posLine: null,
   markers: [],
   emaEnabled: true,
@@ -26,24 +26,16 @@ const ChartMgr = {
    */
   bw() {
     const t = this.themeColors();
-    const dark = this.theme === 'dark';
     return {
       upFill: t.bg, upBorder: t.text, wick: t.text,
       downFill: t.text, downBorder: t.text,
       ink: t.text,
-      volUp: dark ? 'rgba(209,212,220,.28)' : 'rgba(19,23,34,.20)',
-      volDown: dark ? 'rgba(209,212,220,.62)' : 'rgba(19,23,34,.55)',
     };
   },
 
   colors() {
     const b = this.bw();
     return { up: b.ink, down: b.ink };      // 成交标记/尺子统一用墨色
-  },
-
-  volColor(bar) {
-    const b = this.bw();
-    return bar.c >= bar.o ? b.volUp : b.volDown;
   },
 
   soft(hex) {
@@ -125,21 +117,10 @@ const ChartMgr = {
     // v5: 成交标记是独立 primitive(不再是 series.setMarkers), 构造时自动 attach
     this.markersPlugin = LightweightCharts.createSeriesMarkers(this.candle, []);
 
-    // 成交量独立 pane (约占 18% 高度)
-    this.volPane = this.chart.addPane();
-    this.volPane.setStretchFactor(0.22);
-    this.vol = this.chart.addSeries(LightweightCharts.HistogramSeries, {
-      priceFormat: { type: 'volume' },
-      priceScaleId: 'vol',
-      priceLineVisible: false, lastValueVisible: false,
-    }, 1);
-    this.chart.priceScale('vol').applyOptions({
-      scaleMargins: { top: 0.15, bottom: 0 },
-      visible: false,
-    });
-
+    // 注: 参考截图里没有成交量副图, 用户也明确说"删了成交量, 我不需要" => 不建 HistogramSeries
+    // 参考截图: EMA 是黑色细线 + 右侧价格轴黑底数值标签 (不是橙色)
     this.ema = this.chart.addSeries(LightweightCharts.LineSeries, {
-      color: '#f7b731', lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
+      color: t.text, lineWidth: 1, priceLineVisible: false, lastValueVisible: true,
       crosshairMarkerVisible: false,
     }, 0);
 
@@ -170,6 +151,7 @@ const ChartMgr = {
       timeScale: { borderColor: t.border },
     });
     this.applyCandleColors();
+    if (this.ema) this.ema.applyOptions({ color: t.text });   // EMA 跟随主题墨色
     if (this._lastData && this._lastData.length) {
       this.setData(this._lastData, { preserve: true });
     }
@@ -229,16 +211,13 @@ const ChartMgr = {
 
     this._lastData = bars.slice();
     const candleData = new Array(bars.length);
-    const volData = new Array(bars.length);
     const emaData = [];
     for (let i = 0; i < bars.length; i++) {
       const b = bars[i];
       candleData[i] = { time: b.t, open: b.o, high: b.h, low: b.l, close: b.c };
-      volData[i] = { time: b.t, value: b.v, color: this.volColor(b) };
       if (this.emaEnabled && b.ema != null) emaData.push({ time: b.t, value: b.ema });
     }
     this.candle.setData(candleData);
-    this.vol.setData(volData);
     this.ema.setData(emaData);
     if (bars.length) this.setLastPrice(bars[bars.length - 1]);
 
@@ -271,7 +250,6 @@ const ChartMgr = {
 
     this._lastData.push(bar);
     this.candle.update({ time: bar.t, open: bar.o, high: bar.h, low: bar.l, close: bar.c });
-    this.vol.update({ time: bar.t, value: bar.v, color: this.volColor(bar) });
     if (this.emaEnabled && bar.ema != null) this.ema.update({ time: bar.t, value: bar.ema });
     this.setLastPrice(bar);
 
@@ -336,7 +314,6 @@ const ChartMgr = {
       return;
     }
     const cd = param.seriesData.get(this.candle);
-    const vd = param.seriesData.get(this.vol);
-    if (App.onLegend) App.onLegend(cd, vd, param.time);
+    if (App.onLegend) App.onLegend(cd, param.time);
   },
 };

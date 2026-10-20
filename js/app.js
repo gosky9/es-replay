@@ -77,6 +77,17 @@ const App = {
     $('customBtn').addEventListener('click', () => { this.mode = 'custom'; this.startSession(); });
     $('exitBtn').addEventListener('click', () => this.exitApp());
 
+    /* 图例上的按钮 (照参考截图: 卖出 / 买入 / 回放 / EMA 开关) */
+    $('lgSellBtn').addEventListener('click', () => this.placeOrder('sell'));
+    $('lgBuyBtn').addEventListener('click', () => this.placeOrder('buy'));
+    $('lgReplayBtn').addEventListener('click', () => { this.mode = 'random'; this.startSession(); });
+    $('lgEmaBtn').addEventListener('click', () => {
+      ChartMgr.setEmaEnabled(!ChartMgr.emaEnabled);
+      if (ChartMgr._lastData) ChartMgr.setData(ChartMgr._lastData, { preserve: true });
+      this.fillIndicators(this.engine ? this.bars[this.engine.idx] : null);
+      this.syncToolUI();
+    });
+
     /* 左侧工具栏 + 顶部收藏工具横条 (共用一套分发, 两处 active 状态同步) */
     const onToolClick = e => {
       const b = e.target.closest('button[data-tool]'); if (!b) return;
@@ -320,10 +331,19 @@ const App = {
     await this.loadAndBuild(true);
   },
 
+  /** 周期显示名: 分钟只写数字(截图里是 "· 5 ·"), 其余给中文单位 */
+  tfLabel() {
+    const n = this.tf.replace(/[mhdw]$/, '');
+    if (this.tf.endsWith('m')) return n;
+    if (this.tf.endsWith('h')) return `${n}小时`;
+    if (this.tf.endsWith('d')) return n === '1' ? '天' : `${n}天`;
+    return n === '1' ? '周' : `${n}周`;
+  },
+
   syncTfUI() {
     document.querySelectorAll('#tfGroup button[data-tf]').forEach(b =>
       b.classList.toggle('active', b.dataset.tf === this.tf));
-    document.getElementById('lgTf').textContent = this.tf;
+    document.getElementById('lgTf').textContent = this.tfLabel();
     document.getElementById('symMeta').textContent = `· ${this.tf} · CME`;
     document.getElementById('modalTf').value = this.tf;
   },
@@ -658,8 +678,8 @@ const App = {
     this.renderTrading();
   },
 
-  /* ---------- 图例 (TradingView: O/H/L/C + 涨跌 + 量) ---------- */
-  setLegend(cd, vd) {
+  /* ---------- 图例 (照参考截图: 开/高/低/收 + 卖出/买入 + 指标行) ---------- */
+  setLegend(cd) {
     const $ = id => document.getElementById(id);
     const up = cd.close >= cd.open;
     $('lgO').textContent = cd.open.toFixed(2);
@@ -667,37 +687,33 @@ const App = {
     $('lgL').textContent = cd.low.toFixed(2);
     $('lgC').textContent = cd.close.toFixed(2);
     const chg = cd.close - cd.open;
-    $('lgChg').textContent = `${chg >= 0 ? '+' : ''}${chg.toFixed(2)} (${((cd.close / cd.open - 1) * 100).toFixed(2)}%)`;
+    const pct = (cd.close / cd.open - 1) * 100;
+    $('lgChg').textContent = `${chg >= 0 ? '+' : ''}${chg.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
     $('lgChg').style.color = up ? 'var(--up)' : 'var(--down)';
-    $('lgVol').innerHTML = vd ? `<b>Vol</b> ${vd.value.toLocaleString()}` : '';
+    // 卖/买按钮上挂当前收盘价 (TV 的快速下单按钮)
+    $('lgSell').textContent = cd.close.toFixed(2);
+    $('lgBuy').textContent = cd.close.toFixed(2);
+    const mid = $('lgMid');
+    if (mid) mid.textContent = Trading.pos === 0 ? '0.00' : String(Math.abs(Trading.pos));
   },
 
-  onLegend(cd, vd, time) {
+  onLegend(cd, time) {
     if (!cd) { this.onLegendIdle(); return; }
-    this.setLegend(cd, vd);
-    const $ = id => document.getElementById(id);
+    this.setLegend(cd);
     // 指标行: 悬停那根的值 + 它的 Bar 序号
     const arr = ChartMgr._lastData || [];
     let idx = -1;
     for (let i = arr.length - 1; i >= 0; i--) { if (arr[i].t === time) { idx = i; break; } }
     const bar = idx >= 0 ? arr[idx] : arr[arr.length - 1];
     this.fillIndicators(bar);
-    if (Trading.pos !== 0) {
-      $('lgPos').textContent = `持仓 ${Math.abs(Trading.pos)} 手${Trading.pos > 0 ? '多' : '空'} @ ${Trading.avg.toFixed(2)}`;
-    } else $('lgPos').textContent = '';
   },
 
   onLegendIdle() {
-    const $ = id => document.getElementById(id);
     if (!this.engine) return;
-    const idx = this.engine.idx;
-    const b = this.bars[idx];
+    const b = this.bars[this.engine.idx];
     if (!b) return;
-    this.setLegend({ open: b.o, high: b.h, low: b.l, close: b.c }, { value: b.v });
+    this.setLegend({ open: b.o, high: b.h, low: b.l, close: b.c });
     this.fillIndicators(b);
-    if (Trading.pos !== 0) {
-      $('lgPos').textContent = `持仓 ${Math.abs(Trading.pos)} 手${Trading.pos > 0 ? '多' : '空'} @ ${Trading.avg.toFixed(2)}`;
-    } else $('lgPos').textContent = '';
   },
 };
 

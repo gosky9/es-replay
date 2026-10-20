@@ -6,6 +6,7 @@ data/*
 server.log
 port.txt
 _shot_*.png
+_cmp_*.png
 
 # 工具链
 __pycache__/
