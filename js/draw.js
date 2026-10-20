@@ -619,17 +619,17 @@ const Draw = {
     if (midY == null) return;
 
     // 从价格轴往左排: 盒子 → SL 圆 → TP 圆 → pill
-    const CR = 11, BW = 140, BH = 26;
+    const CR = 11, BW = 112, BH = 26;
     const boxX = plotR - BW;
-    const slX = boxX - 42;
-    const tpX = slX - 42;
+    const slX = boxX - 40;
+    const tpX = slX - 40;
     const pillR = tpX - 22;
 
     ctx.save();
     // pill
     ctx.font = '600 12px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
     const pillTxt = pos > 0 ? '买入' : '卖出';
-    const pillW = ctx.measureText(pillTxt).width + 26, pillH = 26;
+    const pillW = ctx.measureText(pillTxt).width + 32, pillH = 26;
     this.roundRect(ctx, pillR - pillW, midY - pillH / 2, pillW, pillH, 5);
     ctx.fillStyle = dir; ctx.fill();
     ctx.fillStyle = '#fff';
@@ -662,26 +662,26 @@ const Draw = {
     ctx.strokeStyle = this.alpha(dir, .55); ctx.lineWidth = 1; ctx.stroke();
     // 竖直分隔线
     ctx.strokeStyle = this.alpha(dir, .28);
-    for (const sx of [bx + 28, bx + 58, bx + BW - 26]) {
+    for (const sx of [bx + 26, bx + 56, bx + 92]) {
       ctx.beginPath(); ctx.moveTo(sx, by + 7); ctx.lineTo(sx, by + BH - 7); ctx.stroke();
     }
     // ◀ 实心小三角
     ctx.beginPath();
-    ctx.moveTo(bx + 9, midY - 5); ctx.lineTo(bx + 17, midY); ctx.lineTo(bx + 9, midY + 5);
+    ctx.moveTo(bx + 8, midY - 5); ctx.lineTo(bx + 16, midY); ctx.lineTo(bx + 8, midY + 5);
     ctx.closePath(); ctx.fillStyle = dir; ctx.fill();
     // 手数
     ctx.fillStyle = dir;
     ctx.font = '700 12px -apple-system, "Segoe UI", sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(String(Math.abs(pos)), bx + 42, midY + .5);
+    ctx.fillText(String(Math.abs(pos)), bx + 41, midY + .5);
     // 止损
     ctx.font = '11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'left';
-    ctx.fillText('止损', bx + 66, midY + .5);
+    ctx.fillText('止损', bx + 64, midY + .5);
     // ✕
     ctx.fillStyle = this.alpha(dir, .85);
     ctx.textAlign = 'right';
-    ctx.fillText('✕', bx + BW - 10, midY + .5);
+    ctx.fillText('✕', bx + BW - 8, midY + .5);
     ctx.restore();
   },
 
@@ -785,25 +785,34 @@ const Draw = {
       const pA = it.a.p, pB = it.b.p;                 // A 锚点=1 级, B 锚点=0 级
       const lvls = it.levels || this.FIB;
       const dark = ChartMgr.theme === 'dark';
-      const lineC = dark ? 'rgba(178,181,190,.85)' : 'rgba(67,70,81,.85)';
+      const lineC = dark ? '#b2b5be' : '#434651';
       const txtC = dark ? '#9598a1' : '#787b86';
       ctx.setLineDash([]);
       ctx.lineWidth = 1;
       ctx.strokeStyle = lineC;
       ctx.font = '13px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
-      ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      ctx.textBaseline = 'middle';
       for (const lv of lvls) {
         const price = pB + (pA - pB) * lv;
         const y = this.yOf(price);
         if (y == null) continue;
         ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+        const txt = `${lv} (${this._fmtPrice(price)})`;
+        const tw = ctx.measureText(txt).width;
         ctx.fillStyle = txtC;
-        ctx.fillText(`${lv} (${this._fmtPrice(price)})`, x0 - 12, y);
+        // 标签默认在线的左端外侧; 左边放不下时才挪到左侧内侧右对齐, 避免被画布裁掉
+        if (x0 - 12 - tw >= 2) {
+          ctx.textAlign = 'right';
+          ctx.fillText(txt, x0 - 12, y);
+        } else {
+          ctx.textAlign = 'left';
+          ctx.fillText(txt, 6, y);
+        }
       }
       // 两个圆形手柄 (空心圆: 蓝环白芯)
       const knob = (cx, cy) => {
         if (cx == null || cy == null) return;
-        ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(cx, cy, 8, 0, Math.PI * 2);
         ctx.fillStyle = dark ? '#131722' : '#fff'; ctx.fill();
         ctx.strokeStyle = this.COLOR; ctx.lineWidth = 1.6; ctx.stroke();
       };
