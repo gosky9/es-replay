@@ -474,9 +474,79 @@ const waitLoaded = page => page.waitForFunction(
   check('拖动止盈止损线调整', slAfter !== slBefore && Math.abs(slAfter - slBefore) > 0.5,
         slBefore + ' → ' + slAfter);
 
-  // 统计与交易记录
+  // 统计与交易记录 (要在下面清空之前判)
   check('交易记录已生成', (await page.evaluate(() => Trading.trades.length)) >= 1,
         await page.textContent('#stWin'));
+
+  /* 16. 每条交易线各自一块右侧牌子 + ✕ 单独关掉 + 按住高亮 */
+  const chipKeys = await page.evaluate(() => ({
+    keys: Draw._chipRects.map(r => r.key),
+    x0s: Draw._chipRects.map(r => Math.round(r.cx0)),
+    W: Draw.W,
+  }));
+  check('入场/止盈/止损 各一块右侧牌子',
+        ['entry', 'tp', 'sl'].every(k => chipKeys.keys.includes(k)), JSON.stringify(chipKeys.keys));
+  check('所有牌子都在右侧(不在最左侧)', chipKeys.x0s.every(v => v > chipKeys.W * 0.7),
+        JSON.stringify(chipKeys.x0s) + ' / W=' + chipKeys.W);
+
+  const tpY2 = await page.evaluate(() => Draw.yOf(Trading.tp));
+  const areaL = (await page.locator('#chartArea').boundingBox()).x;
+  const areaT = (await page.locator('#chartArea').boundingBox()).y;
+  await page.mouse.move(areaL + 240, areaT + tpY2);
+  await page.mouse.down();
+  await page.waitForTimeout(100);
+  const dragOn = await page.evaluate(() => Draw._dragOrder);
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+  const dragOff = await page.evaluate(() => Draw._dragOrder);
+  check('按住交易线时有高亮态, 松开恢复', dragOn === 'tp' && dragOff === null, dragOn + ' → ' + dragOff);
+
+  // 点止盈牌的 ✕ → 只关掉止盈
+  const clickChip = async key => {
+    const r = await page.evaluate(k => {
+      const x = (Draw._chipRects || []).find(v => v.key === k);
+      return x ? { x: (x.cx0 + x.cx1) / 2, y: (x.y0 + x.y1) / 2 } : null;
+    }, key);
+    if (!r) return false;
+    await page.mouse.click(areaL + r.x, areaT + r.y);
+    await page.waitForTimeout(150);
+    return true;
+  };
+  const closedTp = await clickChip('tp');
+  const st1 = await page.evaluate(() => ({ tp: Trading.tp, sl: Trading.sl, pos: Trading.pos }));
+  check('点止盈牌 ✕ 只关掉止盈(止损与持仓保留)',
+        closedTp && st1.tp === null && st1.sl != null && st1.pos !== 0, JSON.stringify(st1));
+
+  const closedSl = await clickChip('sl');
+  const st2 = await page.evaluate(() => ({ tp: Trading.tp, sl: Trading.sl, pos: Trading.pos }));
+  check('点止损牌 ✕ 只关掉止损(持仓保留)',
+        closedSl && st2.sl === null && st2.pos !== 0, JSON.stringify(st2));
+
+  // 点灰掉的 TP 圆 → 按默认 2R 挂回来
+  const circ = await page.evaluate(() => {
+    const c = (Draw._circleRects || []).find(v => v.key === 'tp');
+    return c ? { x: c.x, y: c.y } : null;
+  });
+  if (circ) {
+    await page.mouse.click(areaL + circ.x, areaT + circ.y);
+    await page.waitForTimeout(150);
+  }
+  const st3 = await page.evaluate(() => ({ tp: Trading.tp }));
+  check('点 TP 圆按钮可把止盈按默认点位挂回来', st3.tp != null, JSON.stringify(st3));
+
+  // 突破挂单的牌子也在右侧
+  const stopChip = await page.evaluate(() => {
+    Trading.reset();
+    const b = ChartMgr._lastData[ChartMgr._lastData.length - 1];
+    Trading.placeStop('buy', 1, b.c + 2);
+    Draw.render();
+    const r = Draw._chipRects.find(x => x.key.indexOf('stop:') === 0);
+    return r ? { key: r.key, x0: Math.round(r.cx0), W: Draw.W } : null;
+  });
+  check('突破挂单牌子在最右侧(不再贴左边)',
+        !!stopChip && stopChip.x0 > stopChip.W * 0.7, JSON.stringify(stopChip));
+  await page.evaluate(() => { Trading.reset(); });
+
   await page.evaluate(() => { Trading.reset(); Draw.clearAll(); });
 
   /* 16. 主题切换 */

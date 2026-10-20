@@ -16,6 +16,8 @@ const Draw = {
   draft: null,
   selected: null,
   _drag: null,
+  _chipRects: [],           // 交易线上右侧牌子的 ✕ 命中区 (每次 render 重建)
+  _circleRects: [],         // 入场行上 TP / SL 两个圆按钮的命中区
 
   COLOR: '#2962ff',
   BAR_IDX_COLOR: '#f7a600',
@@ -273,6 +275,20 @@ const Draw = {
     if (t == null) return;
 
     if (this.tool === 'cursor') {
+      // 0) 右侧牌子上的 ✕ 优先: 关掉这条线 (挂单/止盈/止损/持仓)
+      const ck = this._hitChipClose(x, y);
+      if (ck) {
+        e.preventDefault(); e.stopPropagation();
+        this.closeOrderLine(ck);
+        return;
+      }
+      // 0.5) 入场行上的 TP / SL 圆按钮
+      const circ = this._hitCircle(x, y);
+      if (circ) {
+        e.preventDefault(); e.stopPropagation();
+        this.clickBracket(circ);
+        return;
+      }
       // 1) 交易线优先: 挂单 / 入场 / 止盈 / 止损 都可以按住拖动
       const ol = this.hitOrder(y);
       if (ol) {
@@ -519,16 +535,32 @@ const Draw = {
   orderLines() {
     const out = [];
     if (typeof Trading === 'undefined') return out;
+    const mult = Trading.MULT || 50, pos = Trading.pos;
+    // 突破挂单: 每张单一条线 + 一个右侧牌子 (买=蓝 / 卖=红)
     for (const s of (Trading.stops || [])) {
       out.push({
-        key: 'stop:' + s.id, price: s.price, kind: 'stop',
-        label: (s.side === 'buy' ? '突破买 ' : '突破卖 ') + s.qty + '手',
+        key: 'stop:' + s.id, price: s.price, kind: 'stop', qty: s.qty,
+        color: s.side === 'buy' ? '#2962ff' : '#f23645',
+        label: s.side === 'buy' ? '突破买' : '突破卖', pl: null, solid: true,
       });
     }
-    if (Trading.pos !== 0) {
-      out.push({ key: 'entry', price: Trading.avg, kind: 'entry', label: '入场 ' + Trading.avg.toFixed(2) });
-      if (Trading.tp != null) out.push({ key: 'tp', price: Trading.tp, kind: 'tp', label: '止盈 ' + Trading.tp.toFixed(2) });
-      if (Trading.sl != null) out.push({ key: 'sl', price: Trading.sl, kind: 'sl', label: '止损 ' + Trading.sl.toFixed(2) });
+    if (pos !== 0) {
+      const n = Math.abs(pos), long = pos > 0;
+      const plAt = p => (long ? p - Trading.avg : Trading.avg - p) * n * mult;
+      const last = (ChartMgr._lastData || []);
+      const cur = last.length ? last[last.length - 1].c : Trading.avg;
+      out.push({
+        key: 'entry', price: Trading.avg, kind: 'entry', qty: n,
+        color: '#2962ff', label: '', pl: plAt(cur), solid: true,
+      });
+      if (Trading.tp != null) out.push({
+        key: 'tp', price: Trading.tp, kind: 'tp', qty: n,
+        color: '#089981', label: '', pl: plAt(Trading.tp), solid: false,
+      });
+      if (Trading.sl != null) out.push({
+        key: 'sl', price: Trading.sl, kind: 'sl', qty: n,
+        color: '#ff9800', label: '', pl: plAt(Trading.sl), solid: false,
+      });
     }
     return out;
   },
@@ -539,6 +571,70 @@ const Draw = {
       if (yy != null && Math.abs(y - yy) <= 5) return o;
     }
     return null;
+  },
+
+  /** 命中右侧牌子上的 ✕ (返回该条线的 key) */
+  _hitChipClose(x, y) {
+    for (const r of (this._chipRects || [])) {
+      if (x >= r.cx0 && x <= r.cx1 && y >= r.y0 && y <= r.y1) return r.key;
+    }
+    return null;
+  },
+
+  /** 命中入场行上的 TP / SL 圆按钮 */
+  _hitCircle(x, y) {
+    for (const c of (this._circleRects || [])) {
+      if (Math.hypot(x - c.x, y - c.y) <= c.r + 2) return c.key;
+    }
+    return null;
+  },
+
+  /** 点 TP / SL 圆: 没设就按默认 2R/1R 挂回来; 已设则提示可以直接拖线 */
+  clickBracket(kind) {
+    if (typeof Trading === 'undefined' || Trading.pos === 0) return;
+    const has = kind === 'tp' ? Trading.tp != null : Trading.sl != null;
+    if (has) {
+      if (typeof App !== 'undefined') {
+        App.toast(`${kind === 'tp' ? '止盈' : '止损'}在 ${(kind === 'tp' ? Trading.tp : Trading.sl).toFixed(2)} · 直接拖那条虚线可改价`);
+      }
+      return;
+    }
+    const n = Math.abs(Trading.pos), long = Trading.pos > 0;
+    const d = kind === 'tp' ? 12 : 6;
+    const px = Math.round((long ? Trading.avg + (kind === 'tp' ? d : -d)
+                               : Trading.avg - (kind === 'tp' ? d : -d)) * 4) / 4;
+    if (kind === 'tp') Trading.tp = px; else Trading.sl = px;
+    Trading.save(); this.render();
+    if (typeof App !== 'undefined') App.toast(`已挂${kind === 'tp' ? '止盈' : '止损'} @ ${px.toFixed(2)} (${n}手)`);
+  },
+
+  /** 点 ✕ 关掉某一条: 挂单→撤销; 止盈/止损→取消; 入场→平仓 */
+  closeOrderLine(key) {
+    if (typeof Trading === 'undefined' || !key) return false;
+    if (key.indexOf('stop:') === 0) {
+      const id = +key.slice(5);
+      const n0 = Trading.stops.length;
+      Trading.stops = Trading.stops.filter(s => s.id !== id);
+      Trading.save(); this.render();
+      if (typeof App !== 'undefined') App.toast(n0 > Trading.stops.length ? '已撤销这张挂单' : '挂单已不存在');
+      return true;
+    }
+    if (key === 'tp') {
+      Trading.tp = null; Trading.save(); this.render();
+      if (typeof App !== 'undefined') App.toast('已取消止盈 (只保留止损)');
+      return true;
+    }
+    if (key === 'sl') {
+      Trading.sl = null; Trading.save(); this.render();
+      if (typeof App !== 'undefined') App.toast('已取消止损 (只保留止盈)');
+      return true;
+    }
+    if (key === 'entry') {
+      if (typeof App !== 'undefined') App.closePosition();
+      this.render();
+      return true;
+    }
+    return false;
   },
 
   applyOrderDrag(key, price) {
@@ -555,134 +651,212 @@ const Draw = {
     try { return ChartMgr.chart.priceScale('right').width() || 60; } catch (e) { return 60; }
   },
 
+  /** 美元盈亏: 0.00 / +275.00 / -212.50 */
+  _fmtUsd(v) {
+    if (v == null || !isFinite(v)) return '—';
+    const a = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (Math.abs(v) < 0.005) return '0.00 USD';
+    return (v > 0 ? '+' : '-') + a + ' USD';
+  },
+
+  /** 右侧小牌: [◀ N] | 内容 | ✕   —— 照 reference/10~13 截图 */
+  _drawChip(ctx, rightX, cy, o) {
+    const H = 22, PAD = 4;
+    const bg = ChartMgr.themeColors().bg;
+    const pressed = (this._dragOrder === o.key);
+    const color = o.color;
+    ctx.save();
+    ctx.font = '700 11px -apple-system, "Segoe UI", sans-serif';
+    const leftTxt = '◀ ' + o.qty;
+    const wl = Math.ceil(ctx.measureText(leftTxt).width) + 18;
+    ctx.font = '500 11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+    const midTxt = (o.pl != null) ? this._fmtUsd(o.pl) : (o.label || '');
+    const wm = Math.ceil(ctx.measureText(midTxt).width) + 22;
+    const wc = 26;
+    const W = wl + wm + wc;
+    const x0 = rightX - W, y0 = cy - H / 2, y1 = y0 + H;
+    const sepX1 = x0 + wl, sepX2 = x0 + wl + wm;
+
+    this.roundRect(ctx, x0, y0, W, H, 4);
+    if (o.solid) {
+      // 实心款 (入场 / 突破挂单): 白底 + 实色描边 + 实色左块
+      // 按住时整块泛蓝调、中段文字转实色 —— 照 reference/15、16 的编辑态
+      if (pressed) {
+        ctx.fillStyle = ChartMgr.themeColors().bg; ctx.fill();
+        ctx.fillStyle = this.alpha(color, .16); ctx.fill();
+      } else {
+        ctx.fillStyle = bg; ctx.fill();
+      }
+      ctx.strokeStyle = color; ctx.lineWidth = pressed ? 1.6 : 1; ctx.stroke();
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(x0 + 4, y0); ctx.arcTo(x0, y0, x0, y0 + 4, 4);
+      ctx.lineTo(x0, y1 - 4); ctx.arcTo(x0, y1, x0 + 4, y1, 4);
+      ctx.lineTo(sepX1, y1); ctx.lineTo(sepX1, y0); ctx.closePath();
+      ctx.clip();
+      ctx.fillStyle = color; ctx.fillRect(x0, y0, wl, H);
+      ctx.restore();
+      ctx.fillStyle = '#fff';
+      ctx.font = '700 11px -apple-system, "Segoe UI", sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(leftTxt, x0 + wl / 2, cy + .5);
+      ctx.fillStyle = pressed ? color
+        : (ChartMgr.theme === 'dark' ? '#9598a1' : '#787b86');
+      ctx.font = '500 11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+      ctx.fillText(midTxt, sepX1 + wm / 2, cy + .5);
+    } else {
+      // 虚框款 (止盈 / 止损): 淡色底 + 虚线描边 + 同色文字
+      ctx.fillStyle = this.alpha(color, pressed ? .22 : .07); ctx.fill();
+      ctx.setLineDash([3, 2.5]);
+      ctx.strokeStyle = this.alpha(color, .85); ctx.lineWidth = pressed ? 1.5 : 1;
+      ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = color;
+      ctx.font = '700 11px -apple-system, "Segoe UI", sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(leftTxt, x0 + wl / 2, cy + .5);
+      ctx.font = '500 11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+      ctx.fillText(midTxt, sepX1 + wm / 2, cy + .5);
+    }
+    // 竖分隔
+    ctx.strokeStyle = this.alpha(color, o.solid ? .35 : .45);
+    ctx.lineWidth = 1;
+    for (const sx of [sepX1, sepX2]) {
+      ctx.beginPath(); ctx.moveTo(sx, y0 + PAD); ctx.lineTo(sx, y1 - PAD); ctx.stroke();
+    }
+    // ✕
+    ctx.fillStyle = color;
+    ctx.font = '400 13px -apple-system, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('✕', sepX2 + wc / 2, cy + .5);
+
+    this._chipRects.push({ key: o.key, cx0: sepX2, cx1: rightX, y0, y1 });
+    ctx.restore();
+    return W;
+  },
+
   drawOrderLines(ctx) {
+    this._chipRects = [];
+    this._circleRects = [];
     const list = this.orderLines();
     if (!list.length) return;
     const t = ChartMgr.themeColors();
     const pos = (typeof Trading !== 'undefined') ? Trading.pos : 0;
-    const LONG = '#2962ff', SHORT = '#f23645';
+    const axisW = this._axisWidth();
+    const plotR = Math.max(220, this.W - axisW - 8);
 
-    // --- 突破挂单: 仍用左侧价格标签牌 ---
-    for (const o of list.filter(x => x.kind === 'stop')) {
+    const yEntry = pos !== 0 ? this.yOf(Trading.avg) : null;
+    const yTp = (pos !== 0 && Trading.tp != null) ? this.yOf(Trading.tp) : null;
+    const ySl = (pos !== 0 && Trading.sl != null) ? this.yOf(Trading.sl) : null;
+
+    // 1) 盈利/亏损区: 入场→止盈 淡绿, 入场→止损 淡橙
+    const zone = (y1, y2, color) => {
+      if (y1 == null || y2 == null) return;
+      ctx.save();
+      ctx.fillStyle = this.alpha(color, .10);
+      ctx.fillRect(0, Math.min(y1, y2), plotR, Math.abs(y2 - y1));
+      ctx.restore();
+    };
+    zone(yEntry, yTp, '#089981');
+    zone(yEntry, ySl, '#ff9800');
+
+    // 2) 各条价格线
+    for (const o of list) {
       const y = this.yOf(o.price);
       if (y == null) continue;
+      const pressed = (this._dragOrder === o.key);
       ctx.save();
-      ctx.lineWidth = 1; ctx.strokeStyle = t.text; ctx.globalAlpha = 0.66;
-      ctx.setLineDash([6, 4]);
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(this.W, y); ctx.stroke();
-      ctx.restore();
-      ctx.save();
-      ctx.font = '11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
-      const w = ctx.measureText(o.label).width + 12;
-      ctx.globalAlpha = 0.92; ctx.fillStyle = t.text;
-      ctx.fillRect(6, y - 8, w, 16);
-      ctx.globalAlpha = 1; ctx.fillStyle = t.bg;
-      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-      ctx.fillText(o.label, 12, y);
+      ctx.lineWidth = pressed ? 1.6 : 1;
+      ctx.strokeStyle = this.alpha(o.color, pressed ? 1 : .8);
+      ctx.setLineDash(o.solid ? [] : [4, 4]);
+      ctx.beginPath();
+      if (o.kind === 'entry') { ctx.moveTo(0, y); ctx.lineTo(this.W, y); }
+      else { ctx.moveTo(0, y); ctx.lineTo(plotR, y); }
+      ctx.stroke();
       ctx.restore();
     }
 
-    if (pos === 0) return;
-
-    // --- 持仓: 照 reference/04、05 截图 ---
-    //     [买入/卖出 pill] · [TP 虚线圆] · [SL 虚线圆] · [◀ | N | 止损 | ✕ 盒子]
-    const dir = pos > 0 ? LONG : SHORT;
-    const yEntry = this.yOf(Trading.avg);
-    const yTp = Trading.tp != null ? this.yOf(Trading.tp) : null;
-    const ySl = Trading.sl != null ? this.yOf(Trading.sl) : null;
-    const axisW = this._axisWidth();
-    const plotR = Math.max(200, this.W - axisW - 8);      // 绘图区右边界(价格轴左侧, 留一点余量)
-    const bg = t.bg;                                      // 元素底色: 遮住穿过的虚线, 与参考图一致
-
-    // 止盈/止损的淡虚线 (只有设了价才画; 拖动圆点即可改价)
-    const thin = (y, color) => {
-      if (y == null) return;
+    // 3) 右侧竖连接线 + 三个小圆点 (把入场/止盈/止损串起来)
+    const ys = [yEntry, yTp, ySl].filter(v => v != null);
+    if (ys.length > 1) {
+      const connX = plotR - 16;
       ctx.save();
-      ctx.globalAlpha = .5; ctx.lineWidth = 1; ctx.strokeStyle = color;
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(plotR, y); ctx.stroke();
-      ctx.restore();
-    };
-    thin(yTp, '#26a69a');
-    thin(ySl, '#ff9800');
-
-    // 入场线 (贯穿全宽, 颜色跟随方向, 很淡)
-    if (yEntry != null) {
-      ctx.save();
-      ctx.lineWidth = 1; ctx.strokeStyle = this.alpha(dir, .5);
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath(); ctx.moveTo(0, yEntry); ctx.lineTo(this.W, yEntry); ctx.stroke();
+      ctx.strokeStyle = this.alpha('#2962ff', .55); ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(connX, Math.min(...ys)); ctx.lineTo(connX, Math.max(...ys));
+      ctx.stroke();
+      for (const yy of ys) {
+        ctx.beginPath(); ctx.arc(connX, yy, 3.2, 0, Math.PI * 2);
+        ctx.fillStyle = t.bg; ctx.fill();
+        ctx.strokeStyle = this.alpha('#2962ff', .85); ctx.stroke();
+      }
       ctx.restore();
     }
+    const chipRight = plotR - 34;
 
-    const midY = yEntry != null ? yEntry : (yTp != null ? yTp : ySl);
-    if (midY == null) return;
+    // 4) 入场行: [买入/卖出 pill] [TP 圆] [SL 圆] [牌子]
+    if (pos !== 0 && yEntry != null) {
+      const dir = pos > 0 ? '#2962ff' : '#f23645';
+      const entry = list.find(o => o.key === 'entry');
+      // 先量牌子宽度, 才能把 pill / 圆往左排
+      const probe = { key: 'entry', qty: entry.qty, color: dir, pl: entry.pl, solid: true, label: '' };
+      ctx.font = '700 11px -apple-system, "Segoe UI", sans-serif';
+      const wl0 = Math.ceil(ctx.measureText('◀ ' + probe.qty).width) + 18;
+      ctx.font = '500 11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+      const wm0 = Math.ceil(ctx.measureText(this._fmtUsd(probe.pl)).width) + 22;
+      const chipW = wl0 + wm0 + 26;
+      const chipX = chipRight - chipW;
 
-    // 从价格轴往左排: 盒子 → SL 圆 → TP 圆 → pill
-    const CR = 11, BW = 112, BH = 26;
-    const boxX = plotR - BW;
-    const slX = boxX - 40;
-    const tpX = slX - 40;
-    const pillR = tpX - 22;
+      const CR = 11;
+      const slX = chipX - 52;
+      const tpX = slX - 44;
+      const pillR = tpX - 24;
 
-    ctx.save();
-    // pill
-    ctx.font = '600 12px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
-    const pillTxt = pos > 0 ? '买入' : '卖出';
-    const pillW = ctx.measureText(pillTxt).width + 32, pillH = 26;
-    this.roundRect(ctx, pillR - pillW, midY - pillH / 2, pillW, pillH, 5);
-    ctx.fillStyle = dir; ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(pillTxt, pillR - pillW / 2, midY + .5);
-
-    // TP / SL 圆: 不透明底 → 淡色 → 虚线圆环 → 同色文字
-    const circle = (cx, cy, label, color) => {
-      ctx.beginPath(); ctx.arc(cx, cy, CR, 0, Math.PI * 2);
-      ctx.fillStyle = bg; ctx.fill();
-      ctx.beginPath(); ctx.arc(cx, cy, CR, 0, Math.PI * 2);
-      ctx.fillStyle = this.alpha(color, .09); ctx.fill();
       ctx.save();
-      ctx.setLineDash([2.5, 2]); ctx.lineWidth = 1.1;
-      ctx.strokeStyle = this.alpha(color, .8); ctx.stroke();
-      ctx.restore();
-      ctx.fillStyle = color;
-      ctx.font = '600 10px -apple-system, "Segoe UI", sans-serif';
+      // pill
+      ctx.font = '600 12px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+      const pillTxt = pos > 0 ? '买入' : '卖出';
+      const pillW = ctx.measureText(pillTxt).width + 32, pillH = 26;
+      this.roundRect(ctx, pillR - pillW, yEntry - pillH / 2, pillW, pillH, 5);
+      ctx.fillStyle = dir; ctx.fill();
+      ctx.fillStyle = '#fff';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(label, cx, cy + .5);
-    };
-    circle(tpX, midY, 'TP', '#26a69a');
-    circle(slX, midY, 'SL', '#ff9800');
+      ctx.fillText(pillTxt, pillR - pillW / 2, yEntry + .5);
+      ctx.restore();
 
-    // ◀ | N | 止损 | ✕ 盒子 (贴价格轴)
-    const bx = boxX, by = midY - BH / 2;
-    this.roundRect(ctx, bx, by, BW, BH, 4);
-    ctx.fillStyle = bg; ctx.fill();
-    ctx.fillStyle = this.alpha(dir, .07); ctx.fill();
-    ctx.strokeStyle = this.alpha(dir, .55); ctx.lineWidth = 1; ctx.stroke();
-    // 竖直分隔线
-    ctx.strokeStyle = this.alpha(dir, .28);
-    for (const sx of [bx + 26, bx + 56, bx + 92]) {
-      ctx.beginPath(); ctx.moveTo(sx, by + 7); ctx.lineTo(sx, by + BH - 7); ctx.stroke();
+      // TP / SL 圆 (不透明底 → 淡色 → 虚线环 → 同色字)
+      const circle = (cx, cy, label, color) => {
+        ctx.beginPath(); ctx.arc(cx, cy, CR, 0, Math.PI * 2);
+        ctx.fillStyle = t.bg; ctx.fill();
+        ctx.beginPath(); ctx.arc(cx, cy, CR, 0, Math.PI * 2);
+        ctx.fillStyle = this.alpha(color, .09); ctx.fill();
+        ctx.save();
+        ctx.setLineDash([2.5, 2]); ctx.lineWidth = 1.1;
+        ctx.strokeStyle = this.alpha(color, .8); ctx.stroke();
+        ctx.restore();
+        ctx.fillStyle = this.alpha(color, Trading.tp != null && label === 'TP' || Trading.sl != null && label === 'SL' ? 1 : .45);
+        ctx.font = '600 10px -apple-system, "Segoe UI", sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(label, cx, cy + .5);
+      };
+      circle(tpX, yEntry, 'TP', '#089981');
+      circle(slX, yEntry, 'SL', '#ff9800');
+      this._circleRects = [
+        { key: 'tp', x: tpX, y: yEntry, r: CR },
+        { key: 'sl', x: slX, y: yEntry, r: CR },
+      ];
+
+      this._drawChip(ctx, chipRight, yEntry, probe);
     }
-    // ◀ 实心小三角
-    ctx.beginPath();
-    ctx.moveTo(bx + 8, midY - 5); ctx.lineTo(bx + 16, midY); ctx.lineTo(bx + 8, midY + 5);
-    ctx.closePath(); ctx.fillStyle = dir; ctx.fill();
-    // 手数
-    ctx.fillStyle = dir;
-    ctx.font = '700 12px -apple-system, "Segoe UI", sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(String(Math.abs(pos)), bx + 41, midY + .5);
-    // 止损
-    ctx.font = '11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText('止损', bx + 64, midY + .5);
-    // ✕
-    ctx.fillStyle = this.alpha(dir, .85);
-    ctx.textAlign = 'right';
-    ctx.fillText('✕', bx + BW - 8, midY + .5);
-    ctx.restore();
+
+    // 5) 止盈 / 止损 / 挂单 各自的牌子
+    for (const o of list) {
+      if (o.kind === 'entry') continue;
+      const y = this.yOf(o.price);
+      if (y == null) continue;
+      // 跟入场行挨得太近就跳开, 免得两块牌子叠在一起
+      if (yEntry != null && Math.abs(y - yEntry) < 26) continue;
+      this._drawChip(ctx, chipRight, y, o);
+    }
   },
 
   /** Bar Count 指标: 当日序号 (RTH 按自然日 / ETH 按 CME 交易日, 每日首根=1)
