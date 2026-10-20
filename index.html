@@ -253,6 +253,9 @@
         <button data-tool="rect" class="dbtn" title="矩形">
           <svg viewBox="0 0 28 28"><rect x="4.5" y="7.5" width="19" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
         </button>
+        <button data-tool="fib" class="dbtn" title="斐波那契回撤">
+          <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 22L22 6"/><path d="M4.5 22h19M4.5 16h19M4.5 10.5h19"/></g></svg>
+        </button>
         <button data-tool="text" class="dbtn" title="文字">
           <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M6 7.5h16M14 7.5V21"/></g></svg>
         </button>
@@ -429,6 +432,7 @@
 <!-- ============ 开始弹窗 ============ -->
 <div id="startModal" class="modal-mask">
   <div class="modal">
+    <button id="startModalClose" class="modal-x" title="关闭 (不改变当前复盘)">✕</button>
     <div class="modal-title">ES 复盘练习</div>
     <div class="modal-sub">CME E-mini S&P 500 · 1分钟数据 · 加法向后复权连续序列</div>
     <div class="modal-row">

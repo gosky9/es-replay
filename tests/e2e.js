@@ -22,7 +22,7 @@ const waitLoaded = page => page.waitForFunction(
   const page = await browser.newPage({ viewport: { width: 1600, height: 900 } });
   const errors = [];
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-  page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));
+  page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message + ' @ ' + String(e.stack || '').split('\n')[1]));
 
   /* 1. 加载 */
   await page.goto(BASE + '/index.html', { waitUntil: 'networkidle' });
@@ -269,7 +269,7 @@ const waitLoaded = page => page.waitForFunction(
 
   check('收藏工具横条可见', await page.isVisible('#drawBar'));
   const dbarN = await page.evaluate(() => document.querySelectorAll('#drawBar button[data-tool]').length);
-  check('收藏横条按钮数', dbarN === 8, String(dbarN) + ' 个');
+  check('收藏横条按钮数(趋势线/水平线/矩形/斐波那契/文字/尺子/磁吸/隐藏/清空)', dbarN === 9, String(dbarN) + ' 个');
 
   const box = await page.locator('#chartMain').boundingBox();
   const P = (dx, dy) => ({ x: box.x + dx, y: box.y + dy });
@@ -782,6 +782,80 @@ const waitLoaded = page => page.waitForFunction(
   await page.waitForTimeout(200);
   const gridOff2 = await page.evaluate(() => !!ChartMgr.chart.options().grid.vertLines.visible);
   check('网格开关 (默认关)', gridOn === true && gridOff2 === false);
+
+  /* ⑧ 收藏条里有斐波那契按钮, 点两下就能画出来 */
+  const hasFibBtn = !!(await page.$('#drawBar button[data-tool="fib"]'));
+  await page.click('#drawBar button[data-tool="fib"]');
+  const fibTool = await page.evaluate(() => Draw.tool);
+  const cvF = await page.locator('#chartMain').boundingBox();
+  const yF = await page.evaluate(() => Draw.yOf(ChartMgr._lastData[ChartMgr._lastData.length - 1].c));
+  await page.mouse.click(cvF.x + 300, cvF.y + yF - 55);
+  await page.waitForTimeout(120);
+  await page.mouse.move(cvF.x + 620, cvF.y + yF + 55);
+  await page.waitForTimeout(80);
+  await page.mouse.click(cvF.x + 620, cvF.y + yF + 55);
+  await page.waitForTimeout(200);
+  const fibDrawn = await page.evaluate(() => ({ types: Draw.items.map(i => i.type), tool: Draw.tool }));
+  check('收藏条有斐波那契按钮, 两点画出斐波那契',
+        hasFibBtn && fibTool === 'fib' && fibDrawn.types.includes('fib') && fibDrawn.tool === 'cursor',
+        `btn=${hasFibBtn} tool=${fibTool} items=${JSON.stringify(fibDrawn.types)}`);
+
+  /* ⑨ 中键点中绘图直接删掉, 不必先左键选中再按 Delete */
+  const midGeo = await page.evaluate(() => {
+    Draw.clearAll(); Draw.setTool('cursor');
+    const bars = ChartMgr._lastData, b = bars[bars.length - 12];
+    Draw.addItem({ type: 'hline', a: { t: b.t, p: b.c }, b: { t: b.t, p: b.c } });
+    Draw.render();
+    return { n: Draw.count(), y: Draw.yOf(b.c), sel: Draw.selected };
+  });
+  await page.mouse.move(cvGeo.left + 420, cvGeo.top + midGeo.y);
+  await page.mouse.down({ button: 'middle' });
+  await page.mouse.up({ button: 'middle' });
+  await page.waitForTimeout(200);
+  const midAfter = await page.evaluate(() => ({ n: Draw.count(), sel: Draw.selected }));
+  check('中键点中绘图直接删掉(不必先选中)',
+        midGeo.n === 1 && midGeo.sel == null && midAfter.n === 0,
+        `${midGeo.n} → ${midAfter.n}`);
+
+  /* 中键点空白处不能误删 */
+  await page.evaluate(() => {
+    const bars = ChartMgr._lastData, b = bars[bars.length - 12];
+    Draw.addItem({ type: 'hline', a: { t: b.t, p: b.c - 40 }, b: { t: b.t, p: b.c - 40 } });
+    Draw.render();
+  });
+  await page.mouse.move(cvGeo.left + 420, cvGeo.top + 26);
+  await page.mouse.down({ button: 'middle' });
+  await page.mouse.up({ button: 'middle' });
+  await page.waitForTimeout(150);
+  check('中键点空白处不误删绘图', (await page.evaluate(() => Draw.count())) === 1);
+
+  /* ⑩ 复盘中途误点「选择随机K线」: 先暂停, 点 ✕ 关掉后原样续播 */
+  await page.evaluate(() => {
+    Draw.clearAll();
+    const bars = ChartMgr._lastData, b = bars[bars.length - 5];
+    Draw.addItem({ type: 'trend', a: { t: b.t, p: b.c },
+                   b: { t: bars[bars.length - 1].t, p: b.c + 5 } });
+    Draw.render();
+    App.engine.play();
+  });
+  await page.waitForTimeout(100);
+  await page.click('#rbPickBtn');
+  await page.waitForTimeout(250);
+  const stOpen = await page.evaluate(() => ({
+    modal: getComputedStyle(document.getElementById('startModal')).display,
+    playing: !!App.engine.playing,
+  }));
+  await page.click('#startModalClose');
+  await page.waitForTimeout(300);
+  const stClosed = await page.evaluate(() => ({
+    modal: getComputedStyle(document.getElementById('startModal')).display,
+    playing: !!App.engine.playing, n: Draw.count(),
+  }));
+  check('复盘中途点「选择随机K线」→ 弹窗暂停, 点 ✕ 关掉原样续播',
+        stOpen.modal === 'flex' && stOpen.playing === false &&
+        stClosed.modal === 'none' && stClosed.playing === true && stClosed.n === 1,
+        JSON.stringify({ stOpen, stClosed }));
+  await page.evaluate(() => { App.engine.pause(); Draw.clearAll(); });
 
   /* 15. 截图 + 错误汇总 */
   await page.click('#btnRestart');

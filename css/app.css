@@ -390,9 +390,19 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
   backdrop-filter: blur(2px);
 }
 .modal {
+  position: relative;
   width: 420px; background: var(--bg-panel); border: 1px solid var(--border);
   border-radius: 10px; padding: 24px; box-shadow: var(--shadow-lg);
 }
+/* 右上角关闭: 复盘到一半误点"选择随机K线"时, 直接叉掉, 不改变当前会话 */
+.modal-x {
+  position: absolute; top: 10px; right: 10px;
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; border-radius: 4px;
+  color: var(--text-dim); font-size: 14px; line-height: 1; cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.modal-x:hover { background: var(--bg-sunken); color: var(--text); }
 .modal-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
 .modal-sub { font-size: 12px; color: var(--text-dim); margin-bottom: 20px; }
 .modal-row { margin-bottom: 16px; }

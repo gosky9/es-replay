@@ -81,11 +81,13 @@ const Trading = {
       const long = this.pos > 0;
       const closeSide = long ? 'sell' : 'buy';
       if (this.sl != null && (long ? bar.l <= this.sl : bar.h >= this.sl)) {
-        this.fill(closeSide, qty, this.sl, 'stop_loss', epoch, off);
-        ev.push({ type: 'exit', kind: 'sl', price: this.sl, side: closeSide });
+        const px = this.sl;                    // 先取值: fill() 平光后会把 sl 清成 null
+        this.fill(closeSide, qty, px, 'stop_loss', epoch, off);
+        ev.push({ type: 'exit', kind: 'sl', price: px, side: closeSide });
       } else if (this.tp != null && (long ? bar.h >= this.tp : bar.l <= this.tp)) {
-        this.fill(closeSide, qty, this.tp, 'take_profit', epoch, off);
-        ev.push({ type: 'exit', kind: 'tp', price: this.tp, side: closeSide });
+        const px = this.tp;
+        this.fill(closeSide, qty, px, 'take_profit', epoch, off);
+        ev.push({ type: 'exit', kind: 'tp', price: px, side: closeSide });
       }
     }
     return ev;

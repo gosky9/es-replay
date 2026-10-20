@@ -140,6 +140,7 @@ const Draw = {
   },
 
   yOf(p) {
+    if (p == null || !isFinite(p)) return null;      // 价格缺失时不要拿 null 去换算(否则标签 toFixed 会炸)
     const y = ChartMgr.candle.priceToCoordinate(p);
     return (y == null || !isFinite(y)) ? null : y;
   },
@@ -222,6 +223,16 @@ const Draw = {
     this.render();
     return true;
   },
+  /** 按 id 删掉单个绘图 (中键点击用), 返回被删的那条 */
+  removeById(id) {
+    const it = this.items.find(i => i.id === id);
+    if (!it) return null;
+    this.pushHistory();
+    this.items = this.items.filter(i => i.id !== id);
+    if (this.selected === id) this.selected = null;
+    this.render();
+    return it;
+  },
   removeAll() {
     const n = this.items.length;
     if (n) this.pushHistory();
@@ -264,6 +275,20 @@ const Draw = {
 
   onDown(e) {
     if (!App.engine || this.hidden) return;
+    // 中键: 点中哪个绘图就直接删掉, 不必先左键选中再按 Delete
+    if (e.button === 1) {
+      const { x, y } = this._pos(e);
+      if (x < 0 || y < 0 || x > this.W || y > this.H) return;
+      if (this.draft) return;
+      const h = this.hitTest(x, y);
+      if (!h) return;                      // 空白处放行, 不挡浏览器自己的中键行为
+      e.preventDefault(); e.stopPropagation();
+      const gone = this.removeById(h.id);
+      if (gone && typeof App !== 'undefined' && App.toast) {
+        App.toast('已删除' + (App.TOOL_NAME[gone.type] || '绘图'));
+      }
+      return;
+    }
     if (e.button !== 0) return;                    // 右键交给 contextmenu
     const { x, y } = this._pos(e);
     if (x < 0 || y < 0 || x > this.W || y > this.H) return;

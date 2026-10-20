@@ -120,6 +120,8 @@ const App = {
     $('lgSellBtn').addEventListener('click', () => this.placeOrder('sell'));
     $('lgBuyBtn').addEventListener('click', () => this.placeOrder('buy'));
     $('lgReplayBtn').addEventListener('click', () => this.startReplay());
+    const smx = $('startModalClose');
+    if (smx) smx.addEventListener('click', () => this.closeStartModal());
     $('lgEmaBtn').addEventListener('click', () => {
       ChartMgr.setEmaEnabled(!ChartMgr.emaEnabled);
       if (ChartMgr._lastData) ChartMgr.setData(ChartMgr._lastData, { preserve: true });
@@ -346,7 +348,7 @@ const App = {
   },
 
   /* ---------- 工具栏分发 (左侧工具栏 + 顶部收藏条共用) ---------- */
-  DRAW_TOOLS: ['cursor', 'trend', 'hline', 'rect', 'text', 'measure'],
+  DRAW_TOOLS: ['cursor', 'trend', 'hline', 'rect', 'fib', 'text', 'measure'],
   /** 截图里有、但本工具还没实现的工具 —— 点击只提示, 不做任何事 */
   TODO_TOOLS: {
     hmlines: '多水平线', gannfan: '江恩扇形', gannbox: '江恩箱', brush: '画笔',
@@ -354,7 +356,7 @@ const App = {
   },
   TOOL_NAME: {
     cursor: '光标', trend: '趋势线', hline: '水平线', rect: '矩形',
-    text: '文字', measure: '尺子',
+    fib: '斐波那契', text: '文字', measure: '尺子',
   },
 
   /** 明确告知"该功能还没做", 不伪造行为; 提示贴在所点的按钮旁边 */
@@ -448,8 +450,21 @@ const App = {
     $('customDateRow').style.display = 'none';
     $('modalSession').value = this.session;
     $('modalTf').value = this.tf;
+    // 复盘进行中误点进来: 先暂停, 免得在弹窗后面白跑掉几十根
+    if (this.engine && this.engine.playing) { this._resumeAfterModal = true; this.engine.pause(); }
     $('startModal').style.display = 'flex';
     $('replayBar').classList.remove('hidden');
+  },
+
+  /** 弹窗右上角的 ✕: 只关弹窗, 不动当前复盘(不小心点到时的退路) */
+  closeStartModal() {
+    document.getElementById('startModal').style.display = 'none';
+    if (!this.engine) {
+      document.getElementById('replayBar').classList.add('hidden');
+      this.toast('还没开始复盘 · 点图例左侧的 ◀◀ 可以重新选');
+      return;
+    }
+    if (this._resumeAfterModal) { this._resumeAfterModal = false; this.engine.play(); }
   },
 
   /** 打开「自选日期」弹窗 */
@@ -460,6 +475,7 @@ const App = {
     $('customDateRow').style.display = '';
     $('modalSession').value = this.session;
     $('modalTf').value = this.tf;
+    if (this.engine && this.engine.playing) { this._resumeAfterModal = true; this.engine.pause(); }
     $('startModal').style.display = 'flex';
   },
 
@@ -525,6 +541,7 @@ const App = {
 
   /* ---------- 会话生命周期 ---------- */
   async startSession() {
+    this._resumeAfterModal = false;       // 真的开始新会话了, 不要残留自动续播
     const meta = DataLoader.meta;
     if (!meta) { this.toast('数据索引未加载完成, 请稍候', true); return; }
     const from = meta.usableFrom ? Math.floor(new Date(meta.usableFrom + 'T00:00:00Z').getTime() / 1000) : meta.range.first;
@@ -692,6 +709,7 @@ const App = {
   /** 结束本次复盘, 回到开始弹窗 */
   closeReplay() {
     if (!this.engine) return;
+    this._resumeAfterModal = false;
     this.engine.destroy();
     this.engine = null;
     this.bars = [];
@@ -748,8 +766,8 @@ const App = {
     const price = cur ? cur.c : 0;
     const $ = id => document.getElementById(id);
     $('stPos').textContent = Trading.pos === 0 ? '0 手' : `${Math.abs(Trading.pos)} 手${Trading.pos > 0 ? '多' : '空'}`;
-    $('stAvg').textContent = Trading.pos === 0 ? '-' : Trading.avg.toFixed(2);
-    const fp = Trading.floatPnl(price);
+    $('stAvg').textContent = (Trading.pos === 0 || Trading.avg == null) ? '-' : Trading.avg.toFixed(2);
+    const fp = Trading.floatPnl(price) || 0;
     $('stFloat').textContent = Trading.pos === 0 ? '-' : (fp >= 0 ? '+' : '') + fp.toFixed(0) + ' $';
     $('stFloat').className = 'stat-v ' + (fp > 0 ? 'up' : fp < 0 ? 'down' : '');
     $('stReal').textContent = (Trading.realized >= 0 ? '+' : '') + Trading.realized.toFixed(0) + ' $';
