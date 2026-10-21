@@ -294,6 +294,8 @@ const ChartMgr = {
 
   /** 持仓均价线 */
   setPosLine(price) {
+    if (this._posLinePrice === price) return;      // 价格没变就别反复销毁重建
+    this._posLinePrice = price;
     if (this.posLine) { this.candle.removePriceLine(this.posLine); this.posLine = null; }
     if (price != null) {
       this.posLine = this.candle.createPriceLine({
@@ -331,10 +333,23 @@ const ChartMgr = {
 
   onCrosshair(param) {
     if (!param || !param.time || !param.seriesData) {
-      if (App.onLegendIdle) App.onLegendIdle();
+      if (this._hoverT !== null) {                 // 只在真的离开过图区时才回填"当前那根"
+        this._hoverT = null; this._hoverCd = null;
+        if (App.onLegendIdle) App.onLegendIdle();
+      }
       return;
     }
     const cd = param.seriesData.get(this.candle);
-    if (App.onLegend) App.onLegend(cd, param.time);
+    if (!cd) return;
+    // 同一条 K 线内上下移动不必重算图例(每个像素写 8 个 DOM 节点是主要的输入卡顿来源)
+    if (param.time === this._hoverT) return;
+    this._hoverT = param.time;
+    this._hoverCd = cd;
+    if (this._hoverRaf) return;                    // 本帧已排队, 到帧末取最新值
+    this._hoverRaf = requestAnimationFrame(() => {
+      this._hoverRaf = 0;
+      if (this._hoverT == null || !this._hoverCd) return;
+      if (App.onLegend) App.onLegend(this._hoverCd, this._hoverT);
+    });
   },
 };

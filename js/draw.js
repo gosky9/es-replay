@@ -38,7 +38,12 @@ const Draw = {
 
     this.resize();
     new ResizeObserver(() => this.resize()).observe(area);
-    ChartMgr.chart.timeScale().subscribeVisibleLogicalRangeChange(() => this.render());
+    // 画布位置缓存失效: 窗口尺寸/滚动/窗口移动
+    const dropRect = () => { this._rect = null; };
+    window.addEventListener('resize', dropRect, { passive: true });
+    window.addEventListener('scroll', dropRect, { passive: true, capture: true });
+    // 视窗变化(缩放/平移)时重绘, 一帧最多画一次
+    ChartMgr.chart.timeScale().subscribeVisibleLogicalRangeChange(() => this.paintSoon());
     // 仅在拖拽/绘制中才每帧重绘, 避免鼠标移动时的无谓重绘
     ChartMgr.chart.subscribeCrosshairMove(() => {
       if (this.draft || this._drag) this.render();
@@ -56,6 +61,7 @@ const Draw = {
     this.canvas.style.height = h + 'px';
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.W = w; this.H = h;
+    this._rect = null;                 // 尺寸变了, 缓存作废
     this.render();
   },
 
@@ -269,7 +275,10 @@ const Draw = {
 
   /* ---------- 鼠标交互 ---------- */
   _pos(e) {
-    const r = this.canvas.getBoundingClientRect();
+    // 缓存画布位置: getBoundingClientRect 每次 mousemove 都读会触发 layout,
+    // 尺寸变化/滚动时由 resize() 与监听器失效
+    let r = this._rect;
+    if (!r) { r = this._rect = this.canvas.getBoundingClientRect(); }
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   },
 
@@ -540,6 +549,12 @@ const Draw = {
   },
 
   /* ---------- 渲染 ---------- */
+  /** 下一帧再画: 缩放/平移时同一帧可能收到多次范围变化, 合并成一次 */
+  paintSoon() {
+    if (this._paintRaf) return;
+    this._paintRaf = requestAnimationFrame(() => { this._paintRaf = 0; this.render(); });
+  },
+
   render() {
     const ctx = this.ctx;
     if (!ctx || !this.W) return;

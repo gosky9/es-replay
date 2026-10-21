@@ -185,6 +185,34 @@ const waitLoaded = page => page.waitForFunction(
   check('成交标记', (await page.evaluate(() => ChartMgr.markers.length)) === 1);
   check('浮动盈亏', /\$/.test(await page.textContent('#stFloat')), await page.textContent('#stFloat'));
 
+  /* 配色按国际惯例: 多=绿 / 空=红, 盈=绿 / 亏=红 */
+  const cls = await page.evaluate(() => {
+    const g = id => getComputedStyle(document.getElementById(id)).backgroundColor;
+    // 盈亏/买卖的类名靠样式表决定颜色, 用临时节点取样, 不依赖此刻恰好有盈利和亏损单
+    const probe = (html, sel) => {
+      const box = document.createElement('div');
+      box.innerHTML = html;
+      document.body.appendChild(box);
+      const c = getComputedStyle(box.querySelector(sel)).color;
+      box.remove();
+      return c;
+    };
+    return {
+      buy: g('btnBuy'), sell: g('btnSell'),
+      pnlUp: probe('<span class="stat-v up">x</span>', '.stat-v.up'),
+      pnlDown: probe('<span class="stat-v down">x</span>', '.stat-v.down'),
+      sideBuy: probe('<div class="trade-item"><span class="t-side buy">x</span></div>', '.t-side.buy'),
+      sideSell: probe('<div class="trade-item"><span class="t-side sell">x</span></div>', '.t-side.sell'),
+      legendSell: g('lgSellBtn'),
+    };
+  });
+  const GREEN = 'rgb(8, 153, 129)', RED = 'rgb(242, 54, 69)';
+  check('配色国际化(买入绿/卖出红)',
+        cls.buy === GREEN && cls.sell === RED && cls.sideBuy === GREEN && cls.sideSell === RED,
+        JSON.stringify({ buy: cls.buy, sell: cls.sell }));
+  check('配色国际化(盈利绿/亏损红)',
+        cls.pnlUp === GREEN && cls.pnlDown === RED, JSON.stringify({ up: cls.pnlUp, down: cls.pnlDown }));
+
   await page.click('#btnClose');
   await page.waitForTimeout(250);
   check('平仓归零', (await page.textContent('#stPos')) === '0 手', await page.textContent('#stPos'));

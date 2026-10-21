@@ -10,23 +10,19 @@
   --text:      #131722;
   --text-dim:  #787b86;
   --accent:    #2962ff;
-  --up:        #f23645;   /* 涨=红 (中国习惯; 色值取 TradingView) */
-  --down:      #089981;   /* 跌=绿 */
-  --up-soft:   rgba(242,54,69,.10);
-  --down-soft: rgba(8,153,129,.10);
+  /* 涨跌 / 交易方向一律按国际惯例: 涨·多·盈利 = 绿, 跌·空·亏损 = 红 */
+  --up:        #089981;   /* 涨 = 绿 */
+  --down:      #f23645;   /* 跌 = 红 */
+  --up-soft:   rgba(8,153,129,.10);
+  --down-soft: rgba(242,54,69,.10);
+  --long:      #089981;   /* 做多 / 买入 / 盈利 */
+  --short:     #f23645;   /* 做空 / 卖出 / 亏损 */
   --warn:      #f7b731;
   --shadow:    0 2px 10px rgba(19,23,34,.14);
   --shadow-lg: 0 12px 48px rgba(19,23,34,.28);
   --rb-bg:     #ffffff;
 }
-/* 绿涨红跌方案 */
-body[data-scheme="us"] {
-  --up:   #089981;
-  --down: #f23645;
-  --up-soft:   rgba(8,153,129,.10);
-  --down-soft: rgba(242,54,69,.10);
-}
-/* TradingView 深色主题 */
+/* 深色主题 (色值取 TradingView; 涨跌/多空配色与浅色一致, 不再翻转) */
 body[data-theme="dark"] {
   --bg:        #131722;
   --bg-panel:  #1e222d;
@@ -225,7 +221,7 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
 .lg-badge {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 20px; height: 14px; padding: 0 3px; border-radius: 7px;
-  background: var(--up); color: #fff; font-size: 9px; font-weight: 700; letter-spacing: .2px;
+  background: #f23645; color: #fff; font-size: 9px; font-weight: 700; letter-spacing: .2px;
 }
 .lg-name { color: var(--text); font-size: 12px; }
 .lg-flag { width: 11px; height: 11px; color: #f23645; flex: none; }
@@ -249,7 +245,7 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
 }
 .lg-price b { font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .lg-price span { font-size: 10px; opacity: .95; }
-.lg-price.sell { background: var(--up); }
+.lg-price.sell { background: var(--short); }
 .lg-price.buy { background: #2962ff; }
 .lg-price:hover { filter: brightness(1.08); }
 .lg-mid { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; min-width: 22px; text-align: center; }
@@ -347,8 +343,8 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
   flex: 1; border: none; border-radius: 4px; padding: 7px 0; font-size: 13px;
   font-weight: 600; color: #fff; cursor: pointer;
 }
-.btn-buy { background: var(--up); }
-.btn-sell { background: var(--down); }
+.btn-buy { background: var(--long); }
+.btn-sell { background: var(--short); }
 .btn-buy:hover, .btn-sell:hover { filter: brightness(1.08); }
 .btn-close {
   flex: 1; background: var(--bg-sunken); border: 1px solid var(--border);
@@ -367,8 +363,8 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
 .stat { display: flex; flex-direction: column; }
 .stat-k { font-size: 11px; color: var(--text-dim); }
 .stat-v { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.stat-v.up { color: var(--up); }
-.stat-v.down { color: var(--down); }
+.stat-v.up { color: var(--long); }     /* 盈利 */
+.stat-v.down { color: var(--short); }  /* 亏损 */
 
 .trade-list { flex: 1; overflow-y: auto; font-size: 12px; }
 .trade-item {
@@ -376,11 +372,11 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
   border-radius: 4px; margin-bottom: 4px; background: var(--bg-sunken);
 }
 .trade-item .t-time { color: var(--text-dim); font-variant-numeric: tabular-nums; }
-.trade-item .t-side.buy { color: var(--up); font-weight: 600; }
-.trade-item .t-side.sell { color: var(--down); font-weight: 600; }
+.trade-item .t-side.buy { color: var(--long); font-weight: 600; }
+.trade-item .t-side.sell { color: var(--short); font-weight: 600; }
 .trade-item .t-pnl { font-variant-numeric: tabular-nums; }
-.trade-item .t-pnl.up { color: var(--up); }
-.trade-item .t-pnl.down { color: var(--down); }
+.trade-item .t-pnl.up { color: var(--long); }    /* 盈利 */
+.trade-item .t-pnl.down { color: var(--short); } /* 亏损 */
 .trade-empty { color: var(--text-dim); text-align: center; padding: 24px 0; font-size: 12px; }
 
 /* ============ 弹窗 ============ */

@@ -504,10 +504,9 @@ const App = {
   /** 图例两个指标行: EMA 值 / 当前 bar 的当日序号 */
   fillIndicators(bar) {
     const $ = id => document.getElementById(id);
-    const ema = $('lgEma'), bi = $('lgBarIdx');
-    if (ema) ema.textContent = (ChartMgr.emaEnabled && bar && bar.ema != null)
-      ? bar.ema.toFixed(2) : '–';
-    if (bi) bi.textContent = (bar && bar.dayNo > 0) ? String(bar.dayNo) : '–';
+    this._setText($('lgEma'), (ChartMgr.emaEnabled && bar && bar.ema != null)
+      ? bar.ema.toFixed(2) : '–');
+    this._setText($('lgBarIdx'), (bar && bar.dayNo > 0) ? String(bar.dayNo) : '–');
   },
 
   toggleTheme() {
@@ -778,19 +777,25 @@ const App = {
     const st = Trading.stats();
     $('stWin').textContent = `${st.n} 笔 / ${st.winRate}`;
     ChartMgr.setPosLine(Trading.pos === 0 ? null : Trading.avg);
-    // 交易记录
+    // 交易记录: 内容没变就不重建 DOM (回放每推进一根都会走到这里)
     const list = $('tradeList');
     $('tradeCount').textContent = `(${Trading.trades.length})`;
-    if (!Trading.trades.length) {
-      list.innerHTML = '<div class="trade-empty">暂无交易记录</div>';
-    } else {
-      list.innerHTML = Trading.trades.slice().reverse().map(t => `
+    const lastT = Trading.trades[Trading.trades.length - 1];
+    const sig = Trading.trades.length + '|' + (lastT ? (lastT.time || '') + lastT.side + lastT.qty + lastT.price + lastT.pnl : '');
+    if (sig !== this._tradeSig) {
+      this._tradeSig = sig;
+      if (!Trading.trades.length) {
+        list.innerHTML = '<div class="trade-empty">暂无交易记录</div>';
+      } else {
+        list.innerHTML = Trading.trades.slice().reverse().map(t => `
         <div class="trade-item">
-          <span class="t-time">${t.time.slice(5, 16)}</span>
+          <span class="t-time">${String(t.time || '').slice(5, 16)}</span>
           <span class="t-side ${t.side}">${t.side === 'buy' ? '买' : '卖'}${t.qty}手</span>
           <span>@${t.price.toFixed(2)}</span>
           <span class="t-pnl ${t.pnl == null ? '' : t.pnl >= 0 ? 'up' : 'down'}">${t.pnl == null ? '' : (t.pnl >= 0 ? '+' : '') + t.pnl.toFixed(0) + '$'}</span>
         </div>`).join('');
+      }
+      if (list.scrollTop) list.scrollTop = 0;
     }
     if (typeof Draw !== 'undefined' && Draw.render) Draw.render();   // 入场/止盈/止损线跟随持仓
   },
@@ -933,33 +938,48 @@ const App = {
   },
 
   /* ---------- 图例 (照参考截图: 开/高/低/收 + 卖出/买入 + 指标行) ---------- */
+  /** 值没变就不写 DOM (鼠标悬停时每秒会调用几十次) */
+  _setText(el, v) { if (el && el.textContent !== v) el.textContent = v; },
+
   setLegend(cd) {
     const $ = id => document.getElementById(id);
     const up = cd.close >= cd.open;
-    $('lgO').textContent = cd.open.toFixed(2);
-    $('lgH').textContent = cd.high.toFixed(2);
-    $('lgL').textContent = cd.low.toFixed(2);
-    $('lgC').textContent = cd.close.toFixed(2);
+    const o = cd.open.toFixed(2), h = cd.high.toFixed(2), l = cd.low.toFixed(2), c = cd.close.toFixed(2);
+    this._setText($('lgO'), o);
+    this._setText($('lgH'), h);
+    this._setText($('lgL'), l);
+    this._setText($('lgC'), c);
     const chg = cd.close - cd.open;
     const pct = (cd.close / cd.open - 1) * 100;
-    $('lgChg').textContent = `${chg >= 0 ? '+' : ''}${chg.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
-    $('lgChg').style.color = up ? 'var(--up)' : 'var(--down)';
+    this._setText($('lgChg'), `${chg >= 0 ? '+' : ''}${chg.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`);
+    const chgEl = $('lgChg');
+    const col = up ? 'var(--up)' : 'var(--down)';
+    if (chgEl && chgEl.style.color !== col) chgEl.style.color = col;
     // 卖/买按钮上挂当前收盘价 (TV 的快速下单按钮)
-    $('lgSell').textContent = cd.close.toFixed(2);
-    $('lgBuy').textContent = cd.close.toFixed(2);
-    const mid = $('lgMid');
-    if (mid) mid.textContent = Trading.pos === 0 ? '0.00' : String(Math.abs(Trading.pos));
+    this._setText($('lgSell'), c);
+    this._setText($('lgBuy'), c);
+    this._setText($('lgMid'), Trading.pos === 0 ? '0.00' : String(Math.abs(Trading.pos)));
   },
 
   onLegend(cd, time) {
     if (!cd) { this.onLegendIdle(); return; }
     this.setLegend(cd);
-    // 指标行: 悬停那根的值 + 它的 Bar 序号
+    // 指标行: 悬停那根的值 + 它的 Bar 序号 (用索引表, 不再每次线性扫几千根)
     const arr = ChartMgr._lastData || [];
-    let idx = -1;
-    for (let i = arr.length - 1; i >= 0; i--) { if (arr[i].t === time) { idx = i; break; } }
-    const bar = idx >= 0 ? arr[idx] : arr[arr.length - 1];
+    let idx = this._timeIndex(arr).get(time);
+    if (idx === undefined) idx = arr.length - 1;
+    const bar = arr[idx];
     this.fillIndicators(bar);
+  },
+
+  /** time -> 下标 的索引表, 数据数组换了才重建 */
+  _timeIndex(arr) {
+    if (this._idxFor !== arr) {
+      const m = new Map();
+      for (let i = 0; i < arr.length; i++) m.set(arr[i].t, i);
+      this._idxFor = arr; this._idxMap = m;
+    }
+    return this._idxMap;
   },
 
   onLegendIdle() {
