@@ -97,16 +97,23 @@ const ChartMgr = {
   },
 
   /**
-   * 黑白配色 (价格行为学/阿尔·布鲁克斯风格):
-   * 阳线 = 空心(背景色填充 + 深色边框) → 浅色主题下即"白涨"
-   * 阴线 = 实心深色 → "黑跌"
-   * 深色主题下镜像: 阳线空心(深底亮框), 阴线实心亮色
+   * 黑白配色 (价格行为学/阿尔·布鲁克斯风格): 两个主题下都是「白涨黑跌」。
+   * 浅色: 阳线 = 空心(背景白填充 + 黑边框) → 白; 阴线 = 实心黑 → 黑。
+   * 深色: 不能照抄成镜像(那样就成了"黑涨白跌", 用户 2026-10-22 指出错了),
+   *       阳线 = 浅灰实心(读作白), 阴线 = 背景深色填充 + 浅色描边(读作黑, 靠边框才看得见)。
    */
   bw() {
     const t = this.themeColors();
+    if (this.theme === 'dark') {
+      return {
+        upFill: t.text, upBorder: t.text, wick: t.text,        // 涨 = 白(浅灰实心)
+        downFill: t.bg, downBorder: t.text,                    // 跌 = 黑(深底 + 亮边框)
+        ink: t.text,
+      };
+    }
     return {
-      upFill: t.bg, upBorder: t.text, wick: t.text,
-      downFill: t.text, downBorder: t.text,
+      upFill: t.bg, upBorder: t.text, wick: t.text,            // 涨 = 白(空心)
+      downFill: t.text, downBorder: t.text,                    // 跌 = 黑(实心)
       ink: t.text,
     };
   },
@@ -162,6 +169,18 @@ const ChartMgr = {
         rightOffset: 6, barSpacing: 7,
         fixLeftEdge: false, lockVisibleTimeRangeOnResize: true,
         tickMarkFormatter: (time, type) => {
+          // 日/3日/周/月线的 time 是 "YYYY-MM-DD" 字符串, 直接 *1000 会得到 NaN
+          if (typeof time === 'string') {
+            const s = time.split('-').map(Number);
+            if (type === 0) return String(s[0]);
+            if (type === 1) return `${s[1]}月`;
+            return `${s[2]}日`;
+          }
+          if (time && typeof time === 'object') {                   // BusinessDay 形式
+            if (type === 0) return String(time.year);
+            if (type === 1) return `${time.month}月`;
+            return `${time.day}日`;
+          }
           const d = new Date(time * 1000), p = n => String(n).padStart(2, '0');
           if (type === 0) return String(d.getUTCFullYear());        // 年
           if (type === 1) return `${d.getUTCMonth() + 1}月`;          // 月
@@ -175,6 +194,11 @@ const ChartMgr = {
         locale: 'zh-CN',
         // 图表时间戳 = "ET 墙钟编码成的假 UTC 秒", 统一用 UTC 方法格式化 => 恒显示美东时间
         timeFormatter: (t) => {
+          if (typeof t === 'string') return t;                     // 日线: 只显示日期
+          if (t && typeof t === 'object') {
+            const p2 = n => String(n).padStart(2, '0');
+            return `${t.year}-${p2(t.month)}-${p2(t.day)}`;
+          }
           const d = new Date(t * 1000), p = n => String(n).padStart(2, '0');
           return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ` +
                  `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;

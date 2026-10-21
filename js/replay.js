@@ -69,9 +69,10 @@ class ReplayEngine {
     this.pause();
     idx = Math.max(0, Math.min(this.bars.length - 1, idx));
     if (idx === this.idx) return;
-    const forward = idx > this.idx;
     this.idx = idx;
-    this.onTick && this.onTick(this.bars[idx], idx, !forward);
+    // 跳转一律走 setData 重设数据, 不能 appendBar —— 往回跳时 appendBar(旧K线)
+    // 会让 lightweight-charts 抛 "Cannot update oldest data" (测试里真实撞到过)
+    this.onTick && this.onTick(this.bars[idx], idx, false);
     this.onState && this.onState();
   }
 

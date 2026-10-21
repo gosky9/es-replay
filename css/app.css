@@ -266,62 +266,21 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
 }
 .lg-rot:hover { background: var(--bg-hover); }
 
-/* ============ 悬浮回放控制条 (Bar Replay) ============ */
-#replayBar {
-  position: absolute; bottom: 38px; left: 50%; transform: translateX(-50%);
-  z-index: 20; background: var(--rb-bg); border: 1px solid var(--border);
-  border-radius: 22px; box-shadow: var(--shadow); overflow: hidden;
-  transition: opacity .18s, transform .18s;
-  max-width: calc(100% - 24px);
-}
-#replayBar.hidden { opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(8px); }
-.rb-progress {
-  position: absolute; top: 0; left: 0; right: 0; height: 2px; background: transparent;
-}
-.rb-progress i {
-  display: block; height: 100%; width: 0;
-  background: var(--accent); border-radius: 0 1px 1px 0; transition: width .12s linear;
-}
-.rb-row { display: flex; align-items: center; gap: 2px; padding: 5px 8px; }
+/* ============ 回放控制条 (Bar Replay) —— 现在钉在底部栏里, 不浮动 ============ */
 .rb-group { display: flex; align-items: center; gap: 2px; }
-.rb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 6px; flex: none; }
 
 .rb-icon {
-  width: 30px; height: 30px; display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
   background: transparent; border: none; color: var(--text); cursor: pointer;
-  border-radius: 50%; padding: 0;
+  border-radius: 4px; padding: 0;
 }
-.rb-icon svg { width: 16px; height: 16px; }
+.rb-icon svg { width: 15px; height: 15px; }
 .rb-icon:hover { background: var(--bg-hover); }
 .rb-play { color: var(--accent); }
 .rb-play:hover { background: var(--accent); color: #fff; }
 .rb-play .ic-pause { display: none; }
 #replayBar.playing .rb-play .ic-play { display: none; }
 #replayBar.playing .rb-play .ic-pause { display: block; }
-
-.rb-label { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
-.rb-sel {
-  background: transparent; border: none; color: var(--text); font-size: 12px;
-  cursor: pointer; outline: none; padding: 3px 2px; font-weight: 500;
-}
-.rb-goto input {
-  width: 118px; background: var(--bg-sunken); border: 1px solid var(--border);
-  border-radius: 4px; color: var(--text); font-size: 12px;
-  padding: 4px 7px; outline: none; font-variant-numeric: tabular-nums; flex: none;
-}
-.rb-goto input:focus { border-color: var(--accent); }
-.rb-txt {
-  background: transparent; border: none; color: var(--accent); font-size: 12px;
-  cursor: pointer; padding: 4px 6px; border-radius: 4px; font-weight: 500;
-  white-space: nowrap; flex: none;
-}
-.rb-txt:hover { background: var(--bg-hover); }
-.rb-count { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
-.rb-count b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-.rb-time {
-  color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums;
-  white-space: nowrap; margin-left: 8px;
-}
 
 /* ============ 右侧交易面板 ============ */
 #sidePanel {
@@ -574,18 +533,17 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
 .dbtn.active { background: var(--bg-hover); color: var(--accent); }
 .dsep { height: 20px; margin: 0 3px; }
 
-/* ---------- 回放条: 贴时间轴上方的白色方块 ---------- */
+/* ---------- 回放控制条: 钉在底栏左下角, 不再浮动 ---------- */
 #replayBar {
-  position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
-  z-index: 20; display: flex; align-items: center; gap: 3px;
-  padding: 3px 6px; background: var(--bg-panel);
+  position: static; flex: 0 1 auto; min-width: 0;
+  display: flex; align-items: center; gap: 3px;
+  height: 28px; padding: 0 4px;
+  background: var(--bg-panel);
   border: 1px solid var(--border); border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(19,23,34,.12);
-  max-width: calc(100% - 20px);
+  overflow: hidden;
   transition: opacity .18s;
 }
 #replayBar.hidden { opacity: 0; pointer-events: none; }
-.rb-progress { display: none; }
 .rb-pick {
   display: inline-flex; align-items: center; gap: 5px; flex: none;
   height: 24px; padding: 0 8px; background: transparent; border: none;
@@ -608,30 +566,15 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
 .rb-info b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .rb-info i { font-style: normal; font-variant-numeric: tabular-nums; }
 
-/* ---------- 底部栏: 区间按钮 + 回放交易 / 状态条 ---------- */
+/* ---------- 底部栏: 回放控制条(左) + 状态条(右) ---------- */
 #bottomBar {
-  height: 26px; flex: none; display: flex; align-items: center;
+  height: 34px; flex: none; display: flex; align-items: center; gap: 10px;
   justify-content: space-between; padding: 0 6px;
   background: var(--bg-panel); border-top: 1px solid var(--border);
   font-size: 11px; color: var(--text-dim);
 }
-.bb-left, .bb-right { display: flex; align-items: center; gap: 1px; }
-#rangeGroup button {
-  background: transparent; border: none; color: var(--text-dim);
-  font-size: 11px; padding: 3px 7px; border-radius: 3px; cursor: pointer;
-  white-space: nowrap;
-}
-#rangeGroup button:hover { background: var(--bg-hover); color: var(--text); }
-#rangeGroup button.active { color: var(--text); font-weight: 600; background: var(--bg-hover); }
-.bb-div { width: 1px; height: 13px; background: var(--border); margin: 0 7px; flex: none; }
-.bb-replay {
-  display: inline-flex; align-items: center; gap: 5px;
-  background: transparent; border: none; color: var(--text);
-  font-size: 11px; padding: 3px 7px; border-radius: 3px; cursor: pointer;
-}
-.bb-replay svg { width: 13px; height: 13px; }
-.bb-replay:hover { background: var(--bg-hover); }
-.bb-right { gap: 9px; font-variant-numeric: tabular-nums; }
+.bb-right { display: flex; align-items: center; gap: 9px; flex: none;
+            font-variant-numeric: tabular-nums; }
 #statusClock { color: var(--text-dim); }
 #statusSession { color: var(--text); font-weight: 600; }
 #statusAdj { color: var(--text-dim); }
@@ -662,10 +605,10 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
 .lg-ohlc { white-space: nowrap; }
 .lg-name { white-space: nowrap; }
 @media (max-width: 1500px) {
-  #compareBtn, #cmpSymBtn, #intervalBtn, #langBtn { display: none; }
+  #cmpSymBtn, #intervalBtn, #langBtn { display: none; }
 }
 @media (max-width: 1320px) {
-  #layoutBtn, #clockBtn, #settingsBtn, #chartTypeBtn, #alertBtn { display: none; }
+  #clockBtn, #settingsBtn, #chartTypeBtn, #alertBtn { display: none; }
 }
 @media (max-width: 1180px) {
   #gridBtn, #undoBtn, #redoBtn { display: none; }

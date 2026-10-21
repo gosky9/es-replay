@@ -23,20 +23,20 @@
 
     <div class="tb-sep"></div>
 
-    <!-- 周期: 1分 2分 5分 10分 15分 1小时 4小时 天 3天 周 月 12小时 ▾ -->
+    <!-- 周期: 1m 2m 5m 10m 15m 1h 4h 12h D 3D W M ▾ (照 reference/22 原版: 传统英文缩写) -->
     <div class="tf-group" id="tfGroup">
-      <button data-tf="1m">1分</button>
-      <button data-tf="2m">2分</button>
-      <button data-tf="5m" class="active">5分</button>
-      <button data-tf="10m">10分</button>
-      <button data-tf="15m">15分</button>
-      <button data-tf="1h">1小时</button>
-      <button data-tf="4h">4小时</button>
-      <button data-tf="1d">天</button>
-      <button data-tf="3d">3天</button>
-      <button data-tf="1w">周</button>
-      <button data-tf="1M">月</button>
-      <button data-tf="12h">12小时</button>
+      <button data-tf="1m">1m</button>
+      <button data-tf="2m">2m</button>
+      <button data-tf="5m" class="active">5m</button>
+      <button data-tf="10m">10m</button>
+      <button data-tf="15m">15m</button>
+      <button data-tf="1h">1h</button>
+      <button data-tf="4h">4h</button>
+      <button data-tf="12h">12h</button>
+      <button data-tf="1d">D</button>
+      <button data-tf="3d">3D</button>
+      <button data-tf="1w">W</button>
+      <button data-tf="1M">M</button>
       <button class="tf-more-btn" id="tfMoreBtn" title="更多周期">
         <svg viewBox="0 0 8 5"><path d="M0 0l4 5 4-5z" fill="currentColor"/></svg>
       </button>
@@ -80,13 +80,7 @@
   </div>
 
   <div class="tb-right">
-    <button class="tb-icon" id="layoutBtn" title="分屏布局">
-      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><rect x="3.5" y="4.5" width="17" height="15" rx="1"/><path d="M12 4.5v15"/></g></svg>
-    </button>
-    <button class="tb-txt tb-txt-sm" id="compareBtn" title="比较品种">
-      <span>Xe/XAU</span>
-      <svg class="chev" viewBox="0 0 8 5"><path d="M0 0l4 5 4-5z" fill="currentColor"/></svg>
-    </button>
+    <!-- 分屏布局 / Xe-XAU 比较: 用户明确要求删掉 (reference/23) -->
     <button class="tb-icon" id="cmpSymBtn" title="比较/叠加品种">
       <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><circle cx="9" cy="12" r="5.5"/><circle cx="15" cy="12" r="5.5"/></g></svg>
     </button>
@@ -98,7 +92,8 @@
       <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3.2 2"/></g></svg>
     </button>
     <button class="tb-icon" id="settingsBtn" title="设置">
-      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4L18 18M18 6l-1.6 1.6M7.6 16.4L6 18"/></g></svg>
+      <!-- 齿轮 (原来画成"圆 + 8 条射线"像太阳, 用户点出来了): 8 齿外轮廓 + 内圆 -->
+      <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round"><path d="M21.19 10.05 A9.4 9.4 0 0 1 21.19 13.95 L18.75 13.43 A6.9 6.9 0 0 1 17.79 15.76 L19.88 17.12 A9.4 9.4 0 0 1 17.12 19.88 L15.76 17.79 A6.9 6.9 0 0 1 13.43 18.75 L13.95 21.19 A9.4 9.4 0 0 1 10.05 21.19 L10.57 18.75 A6.9 6.9 0 0 1 8.24 17.79 L6.88 19.88 A9.4 9.4 0 0 1 4.12 17.12 L6.21 15.76 A6.9 6.9 0 0 1 5.25 13.43 L2.81 13.95 A9.4 9.4 0 0 1 2.81 10.05 L5.25 10.57 A6.9 6.9 0 0 1 6.21 8.24 L4.12 6.88 A9.4 9.4 0 0 1 6.88 4.12 L8.24 6.21 A6.9 6.9 0 0 1 10.57 5.25 L10.05 2.81 A9.4 9.4 0 0 1 13.95 2.81 L13.43 5.25 A6.9 6.9 0 0 1 15.76 6.21 L17.12 4.12 A9.4 9.4 0 0 1 19.88 6.88 L17.79 8.24 A6.9 6.9 0 0 1 18.75 10.57 Z"/><circle cx="12" cy="12" r="3.15"/></g></svg>
     </button>
     <button class="tb-icon" id="fullBtn" title="全屏">
       <svg viewBox="0 0 24 24"><g stroke="currentColor" stroke-width="1.5" fill="none"><path d="M9 4.5H4.5V9M15 4.5h4.5V9M9 19.5H4.5V15M15 19.5h4.5V15"/></g></svg>
@@ -297,10 +292,11 @@
         <button data-act="clearStops"><span>撤销全部挂单</span></button>
         <button data-act="clearBrackets"><span>清除止盈止损</span></button>
       </div>
+    </div><!-- /#chartArea -->
 
-      <!-- ============ 回放控制条 (照截图: 贴时间轴上方的白色方块条) ============ -->
+    <!-- ============ 底部栏: 回放控制条(左下, 不浮动) + 状态条(右下) ============ -->
+    <footer id="bottomBar">
       <div id="replayBar" class="hidden">
-        <div class="rb-progress"><i id="rbProgressFill"></i></div>
         <button id="rbPickBtn" class="rb-pick" title="选择随机K线">
           <svg viewBox="0 0 20 20"><path d="M10 2l1.6 4.4L16 8l-4.4 1.6L10 14l-1.6-4.4L4 8l4.4-1.6z" fill="currentColor"/></svg>
           <span>选择随机K线</span>
@@ -336,18 +332,18 @@
           <option value="30">30x</option>
         </select>
         <select id="rbTfSel" class="rb-sel" title="回放周期">
-          <option value="1m">1分</option>
-          <option value="2m">2分</option>
-          <option value="5m" selected>5分</option>
-          <option value="10m">10分</option>
-          <option value="15m">15分</option>
-          <option value="1h">1小时</option>
-          <option value="4h">4小时</option>
-          <option value="1d">天</option>
-          <option value="3d">3天</option>
-          <option value="1w">周</option>
-          <option value="1M">月</option>
-          <option value="12h">12小时</option>
+          <option value="1m">1m</option>
+          <option value="2m">2m</option>
+          <option value="5m" selected>5m</option>
+          <option value="10m">10m</option>
+          <option value="15m">15m</option>
+          <option value="1h">1h</option>
+          <option value="4h">4h</option>
+          <option value="12h">12h</option>
+          <option value="1d">D</option>
+          <option value="3d">3D</option>
+          <option value="1w">W</option>
+          <option value="1M">M</option>
         </select>
         <input id="gotoInput" class="rb-date" type="text" placeholder="2024-03-15 09:35" spellcheck="false" title="跳转到该美东时间">
         <button id="gotoBtn" class="rb-icon rb-go" title="跳转到输入的日期时间">
@@ -356,26 +352,6 @@
         <span class="rb-info"><b id="barCount">0</b><i id="replayTime">--</i></span>
         <button id="btnCloseReplay" class="rb-icon" title="结束本次复盘 (Esc)">
           <svg viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 8l12 12M20 8L8 20"/></g></svg>
-        </button>
-      </div>
-    </div>
-
-    <!-- ============ 底部栏: 区间按钮 + 回放交易 / 状态条 ============ -->
-    <footer id="bottomBar">
-      <div class="bb-left" id="rangeGroup">
-        <button data-range="1d">1天</button>
-        <button data-range="5d">5天</button>
-        <button data-range="1M">1个月</button>
-        <button data-range="3M">3个月</button>
-        <button data-range="6M">6个月</button>
-        <button data-range="ytd">YTD</button>
-        <button data-range="1y">1年</button>
-        <button data-range="5y">5年</button>
-        <button data-range="all">全部</button>
-        <span class="bb-div"></span>
-        <button id="replayTradeBtn" class="bb-replay">
-          <svg viewBox="0 0 20 20"><path d="M4 4.5h8.5a2 2 0 012 2v9M4 4.5v11h8.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9.5 8.5l3.5 2.5-3.5 2.5z" fill="currentColor"/></svg>
-          <span>回放交易</span>
         </button>
       </div>
       <div class="bb-right">
@@ -450,9 +426,14 @@
     <div class="modal-row">
       <div class="modal-label">复盘模式</div>
       <div class="seg" id="modeSeg">
-        <button data-mode="random" class="active">随机一段</button>
+        <button data-mode="resume" class="active">继续上次</button>
+        <button data-mode="random">随机一段</button>
         <button data-mode="custom">自选日期</button>
       </div>
+    </div>
+    <div class="modal-row" id="resumeRow">
+      <div class="modal-label">上次看到</div>
+      <div class="modal-note" id="resumeNote">--</div>
     </div>
     <div class="modal-row" id="customDateRow" style="display:none">
       <div class="modal-label">开始时间 <span class="modal-note">(美东时间 ET)</span></div>

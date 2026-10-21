@@ -33,6 +33,7 @@ const App = {
       document.getElementById('dataRangeNote').textContent = '数据加载失败: ' + e.message;
     }
     this.bindUI();
+    this.initStartModal();            // 有上次位置时, 弹窗默认选中「继续上次」
     this.renderTrading();
     this.startClock();
     // 提示气泡要贴着鼠标走, 记一下最后位置
@@ -105,8 +106,8 @@ const App = {
       const ok = ChartMgr.screenshot();
       this.toast(ok ? '截图已保存到下载目录' : '截图失败', !ok);
     });
-    /* 截图有、但本工具没有对应能力 => 明确提示未实现 */
-    ['chartTypeBtn', 'symAddBtn', 'alertBtn', 'layoutBtn', 'compareBtn', 'cmpSymBtn',
+    /* 截图有、但本工具没有对应能力 => 明确提示未实现 (分屏/Xe-XAU 已按用户要求删掉) */
+    ['chartTypeBtn', 'symAddBtn', 'alertBtn', 'cmpSymBtn',
      'intervalBtn', 'clockBtn', 'settingsBtn', 'langBtn', 'tradeBtn']
       .forEach(id => { const el = $(id); if (el) el.addEventListener('click', () => this.notDone(el.title || '该功能', el)); });
     $('sessionSeg').addEventListener('click', e => {
@@ -160,6 +161,7 @@ const App = {
       $('modeSeg').querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
       this.mode = b.dataset.mode;
       $('customDateRow').style.display = this.mode === 'custom' ? '' : 'none';
+      $('resumeRow').style.display = this.mode === 'resume' ? '' : 'none';
     });
     $('startBtn').addEventListener('click', () => this.startSession());
 
@@ -184,17 +186,7 @@ const App = {
       else { this.tf = tf; this.syncTfUI(); }
     });
 
-    /* 底部: 区间按钮 + 回放交易 */
-    $('rangeGroup').addEventListener('click', e => {
-      const b = e.target.closest('button[data-range]'); if (!b) return;
-      $('rangeGroup').querySelectorAll('button[data-range]').forEach(x => x.classList.toggle('active', x === b));
-      this.applyRange(b.dataset.range);
-    });
-    $('replayTradeBtn').addEventListener('click', () => {
-      const bar = $('replayBar');
-      if (!this.engine) { this.startReplay(); return; }
-      bar.classList.toggle('hidden');
-    });
+    /* 底部状态条不接交互; 原来的「区间按钮 + 回放交易」已按用户要求删掉 (reference/22) */
 
     /* 下单 */
     $('dirSeg').addEventListener('click', e => {
@@ -424,40 +416,61 @@ const App = {
     this.toast('已重做');
   },
 
-  /* ---------- 底部区间按钮: 缩放到对应时间跨度 ---------- */
-  applyRange(key) {
-    const bars = this.bars;
-    if (!bars || !bars.length || !this.engine) { this.toast('请先开始复盘', true); return; }
-    const total = this.engine.idx + 1;                  // 已播放到第几根(下标)
-    if (key === 'all') { ChartMgr.fitAll(); return; }
-    const last = bars[total - 1];
-    let fromEpoch = null;
-    const DAY = 86400;
-    if (key === '1d') fromEpoch = last.epoch - DAY;
-    else if (key === '5d') fromEpoch = last.epoch - 5 * DAY;
-    else if (key === '1M') fromEpoch = last.epoch - 30 * DAY;
-    else if (key === '3M') fromEpoch = last.epoch - 91 * DAY;
-    else if (key === '6M') fromEpoch = last.epoch - 182 * DAY;
-    else if (key === '1y') fromEpoch = last.epoch - 365 * DAY;
-    else if (key === '5y') fromEpoch = last.epoch - 365 * 5 * DAY;
-    else if (key === 'ytd') {
-      const p = etParts(last.epoch, last.off);
-      fromEpoch = etWallToEpoch(p.y, 1, 1, 0, 0);
-    }
-    if (fromEpoch == null) return;
-    let i = 0;
-    for (let k = total - 1; k >= 0; k--) { if (bars[k].epoch >= fromEpoch) i = k; else break; }
-    ChartMgr.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, i - 0.5), to: total + 5 });
+  /* 底部区间按钮 (1天/5天/…/全部) 已按用户要求整块删掉, 连同 applyRange 一起去掉 */
+
+  /* ---------- 上次看到的位置 ----------
+     用户要求: 每次打开回放默认回到上次那个时间点。
+     窗口由 (session, tf, anchor) 唯一决定 (DataLoader.loadWindow), 所以存
+       anchor = 本次会话的加载锚点 targetEpoch
+       idx    = 看到第几根 (窗口内下标)
+     两项就能把同一段 K 线、同一个视角精确复原。 */
+  POS_KEY: 'es_replay_pos',
+
+  savedPos() {
+    try {
+      const o = JSON.parse(localStorage.getItem(this.POS_KEY) || 'null');
+      if (!o || !o.anchor || o.idx == null || !o.tf) return null;
+      return o;
+    } catch (e) { return null; }
   },
 
-  /* ---------- 打开「选择随机K线」弹窗 (顶栏回放胶囊 / 图例◀◀ / 底部回放交易 共用) ---------- */
+  savePos() {
+    if (!this.engine || !this.engine.current) return;
+    const cur = this.engine.current;
+    clearTimeout(this._posTimer);
+    this._posTimer = setTimeout(() => {
+      if (!this.engine) return;
+      try {
+        localStorage.setItem(this.POS_KEY, JSON.stringify({
+          tf: this.tf, session: this.session,
+          anchor: this.targetEpoch, idx: this.engine.idx,
+          time: etTimeStr(cur.epoch, cur.off).replace(' ET', ''),
+        }));
+      } catch (e) { /* 隐私模式写不进去就算了 */ }
+    }, 250);
+  },
+
+  /** 开始弹窗的默认状态: 有上次位置就默认「继续上次」, 否则「随机一段」 */
+  initStartModal() {
+    const $ = id => document.getElementById(id);
+    const sp = this.savedPos();
+    this.mode = sp ? 'resume' : 'random';
+    $('modeSeg').querySelectorAll('button').forEach(x =>
+      x.classList.toggle('active', x.dataset.mode === this.mode));
+    $('modeSeg').querySelector('button[data-mode="resume"]').style.display = sp ? '' : 'none';
+    $('customDateRow').style.display = 'none';
+    $('resumeRow').style.display = sp ? '' : 'none';
+    $('resumeNote').textContent = sp
+      ? `${sp.time} · ${TF_LABEL[sp.tf] || sp.tf} / ${(sp.session || '').toUpperCase()}`
+      : '--';
+    $('modalSession').value = sp ? (sp.session || this.session) : this.session;
+    $('modalTf').value = sp ? sp.tf : this.tf;
+  },
+
+  /** 打开「选择随机K线」弹窗 (顶栏回放胶囊 / 图例◀◀ / 弹窗下拉 共用) */
   startReplay() {
     const $ = id => document.getElementById(id);
-    $('modeSeg').querySelectorAll('button').forEach(x => x.classList.toggle('active', x.dataset.mode === 'random'));
-    this.mode = 'random';
-    $('customDateRow').style.display = 'none';
-    $('modalSession').value = this.session;
-    $('modalTf').value = this.tf;
+    this.initStartModal();
     // 复盘进行中误点进来: 先暂停, 免得在弹窗后面白跑掉几十根
     if (this.engine && this.engine.playing) { this._resumeAfterModal = true; this.engine.pause(); }
     $('startModal').style.display = 'flex';
@@ -481,6 +494,7 @@ const App = {
     $('modeSeg').querySelectorAll('button').forEach(x => x.classList.toggle('active', x.dataset.mode === 'custom'));
     this.mode = 'custom';
     $('customDateRow').style.display = '';
+    $('resumeRow').style.display = 'none';
     $('modalSession').value = this.session;
     $('modalTf').value = this.tf;
     if (this.engine && this.engine.playing) { this._resumeAfterModal = true; this.engine.pause(); }
@@ -553,9 +567,23 @@ const App = {
     if (!meta) { this.toast('数据索引未加载完成, 请稍候', true); return; }
     const from = meta.usableFrom ? Math.floor(new Date(meta.usableFrom + 'T00:00:00Z').getTime() / 1000) : meta.range.first;
     const last = meta.range.last - 86400 * 2;
+    this._resumeIdx = null;
+    if (this.mode === 'resume') {
+      // 继续上次: 用上次的锚点重建同一段窗口, 再 seek 回看到的那一根
+      const sp = this.savedPos();
+      if (!sp) {
+        this.mode = 'random';
+        this.toast('没有可继续的位置, 已改为随机一段');
+      } else {
+        this.targetEpoch = sp.anchor;
+        this._resumeIdx = sp.idx;
+        document.getElementById('modalSession').value = sp.session || 'rth';
+        document.getElementById('modalTf').value = sp.tf;
+      }
+    }
     if (this.mode === 'random') {
       this.targetEpoch = from + Math.random() * (last - from);
-    } else {
+    } else if (this.mode === 'custom') {
       const d = document.getElementById('startDate').value;
       const t = document.getElementById('startTime').value || '09:35';
       if (!d) { this.toast('请选择开始日期', true); return; }
@@ -577,6 +605,12 @@ const App = {
     this._limits = []; Trading._pendingLimits = false;
     ChartMgr.setMarkers([]);
     await this.loadAndBuild(true);
+    // 继续上次: 窗口建好后 seek 回上次看到的那一根 (onTick 会带出对应的视窗)
+    if (this._resumeIdx != null && this.engine) {
+      this.engine.seek(Math.min(this._resumeIdx, this.bars.length - 1));
+      this._resumeIdx = null;
+    }
+    this.savePos();
   },
 
   /** 周期显示名: 分钟只写数字(截图里是 "· 5 ·"), 其余给中文单位 */
@@ -668,6 +702,7 @@ const App = {
         this.renderReplayBar();
         this.renderTrading();
         this.refreshMarkers();
+        this.savePos();                    // 记住看到第几根, 下次打开接着来
       };
       this.engine.onState = () => {
         document.getElementById('replayBar').classList.toggle('playing', this.engine.playing);
@@ -762,8 +797,6 @@ const App = {
     const cur = e.current;
     document.getElementById('replayTime').textContent = etTimeStr(cur.epoch, cur.off);
     document.getElementById('barCount').textContent = `${e.played} / ${e.total}`;
-    document.getElementById('rbProgressFill').style.width =
-      (e.played / Math.max(1, e.total) * 100).toFixed(1) + '%';
     document.getElementById('replayBar').classList.toggle('playing', e.playing);
     this.onLegendIdle();
   },

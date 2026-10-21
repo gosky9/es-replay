@@ -340,9 +340,10 @@ const waitLoaded = page => page.waitForFunction(
   const t6 = await page.textContent('#replayTime');
   check('自选起点=2024-03-15', t6.startsWith('2024-03-15'), t6);
 
-  /* 11. 随机复盘 + 会话重置 */
+  /* 11. 随机复盘 + 会话重置 (弹窗现在默认「继续上次」, 这里明确选随机) */
   await page.click('#replayPillBtn');
   await page.waitForTimeout(120);
+  await page.click('#modeSeg button[data-mode="random"]');
   await page.click('#startBtn');
   await waitLoaded(page);
   await page.waitForTimeout(500);
@@ -364,6 +365,7 @@ const waitLoaded = page => page.waitForFunction(
     return Math.ceil(lo * 4) / 4;
   });
   check('限价单价格有效', lp > 0 && Math.abs(lp * 4 - Math.round(lp * 4)) < 1e-6, '挂单价 ' + lp);
+  const tradesBefore = await page.evaluate(() => Trading.trades.length);
   await page.fill('#limitPrice', String(lp));
   await page.click('#btnBuy');
   await page.waitForTimeout(250);
@@ -373,13 +375,20 @@ const waitLoaded = page => page.waitForFunction(
     await page.click('#btnStepFwd');
     await page.waitForTimeout(70);
   }
-  const limitFilled = await page.evaluate(() => App._limits.length === 0 && Trading.pos !== 0);
-  const limDbg = await page.evaluate(() => ({
+  // 判据必须是「有没有成交」而不是「持仓是不是还不为 0」:
+  // 开仓会自动挂 bracket(±若干点), 若成交那根 K 线的区间同时扫到自动止损,
+  // 会在同一根里开完立刻平掉 → pos 回到 0 但成交确实发生了(偶发 FAIL 的真因)
+  const limitFilled = await page.evaluate((n) => {
+    const rec = Trading.trades.slice(n);
+    return App._limits.length === 0 && rec.length > 0 && rec.some(r => r.type === 'limit');
+  }, tradesBefore);
+  const limDbg = await page.evaluate((n) => ({
     lim: App._limits.length, pos: Trading.pos, pend: Trading._pendingLimits,
     stops: Trading.stops.length, tp: Trading.tp, sl: Trading.sl, idx: App.engine.idx,
-  }));
+    newTrades: Trading.trades.slice(n).map(r => `${r.type}/${r.side}@${r.price}`),
+  }), tradesBefore);
   check('限价成交', limitFilled, '持仓=' + await page.textContent('#stPos') + ' ' + JSON.stringify(limDbg));
-  if (limitFilled) await page.click('#btnClose');
+  if (await page.evaluate(() => Trading.pos !== 0)) await page.click('#btnClose');
   await page.click('#typeSeg button[data-type="market"]');
 
   /* 13. Go to 跳转 */
@@ -960,22 +969,29 @@ const waitLoaded = page => page.waitForFunction(
   const bg1 = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   const darkCandle = await page.evaluate(() => {
     const o = ChartMgr.candle.options();
-    return { up: o.upColor, down: o.downColor };
+    return { up: o.upColor, down: o.downColor, downBorder: o.borderDownColor };
   });
   check('切换到深色主题', theme1 === 'dark' && bg1 === 'rgb(19, 23, 34)', theme1 + ' / ' + bg1);
-  check('深色下黑白盘面镜像', darkCandle.up === '#131722' && darkCandle.down === '#d1d4dc',
+  check('深色下也是白涨黑跌 (原来镜像成了黑涨白跌)',
+        darkCandle.up === '#d1d4dc' && darkCandle.down === '#131722'
+        && darkCandle.downBorder === '#d1d4dc',
         JSON.stringify(darkCandle));
   await page.screenshot({ path: SHOT_DARK });
   await page.click('#themeBtn');
   await page.waitForTimeout(400);
   check('切回浅色主题', (await page.evaluate(() => document.body.dataset.theme)) === 'light');
 
-  /* 17. 1:1 复刻项: 顶栏周期 / 底部区间 / 状态条 / 尺子标签 / 占位工具 / 撤销重做 / 网格 */
+  /* 17. 1:1 复刻项: 顶栏周期 / 右上角 / 回放条位置 / 状态条 / 尺子标签 / 占位工具 / 撤销重做 / 网格 */
   const tfLabels = await page.evaluate(() =>
     [...document.querySelectorAll('#tfGroup button[data-tf]')].map(b => b.textContent.trim()));
-  check('顶栏 12 个中文周期', tfLabels.length === 12 && tfLabels[0] === '1分'
-        && tfLabels.includes('3天') && tfLabels.includes('月') && tfLabels.includes('12小时'),
-        tfLabels.join(' '));
+  check('顶栏 12 个英文周期, 顺序 12h 紧跟 4h',
+        tfLabels.join(',') === '1m,2m,5m,10m,15m,1h,4h,12h,D,3D,W,M', tfLabels.join(' '));
+
+  const tbRight = await page.evaluate(() => ({
+    layout: !!document.getElementById('layoutBtn'),
+    cmp: !!document.getElementById('compareBtn'),
+  }));
+  check('右上角的分屏 / Xe-XAU 已删掉', !tbRight.layout && !tbRight.cmp, JSON.stringify(tbRight));
 
   for (const tf of ['2m', '3d', '1M']) {
     await page.click('#tfGroup button[data-tf="' + tf + '"]');
@@ -985,26 +1001,38 @@ const waitLoaded = page => page.waitForFunction(
       && App.engine.total > 0, tf);
     check('周期可用 ' + tf, ok, await page.evaluate(() => App.bars.length + ' 根'));
   }
+  // 日/周/月线的时间是 "YYYY-MM-DD" 字符串, 格式化函数不能拿它当数字乘 1000 (曾显示 NaN月)
+  const axisFmt = await page.evaluate(() => {
+    const f = ChartMgr.chart.options().timeScale.tickMarkFormatter;
+    const out = [];
+    for (const t of ['2018-09-14', '2024-03-15']) for (const k of [0, 1, 2]) out.push(f(t, k));
+    return out;
+  });
+  check('日线时间轴刻度不出现 NaN', axisFmt.every(s => !/NaN/.test(s)), axisFmt.join(' | '));
   await page.click('#tfGroup button[data-tf="5m"]');
   await waitLoaded(page);
   await page.waitForTimeout(400);
 
-  // 底部区间按钮 + 回放交易
-  const rangeN = await page.evaluate(() => document.querySelectorAll('#rangeGroup button[data-range]').length);
-  check('底部 9 个区间按钮', rangeN === 9, String(rangeN));
-  await page.click('#rangeGroup button[data-range="1d"]');
-  await page.waitForTimeout(300);
-  const r1d = await page.evaluate(() => {
-    const r = ChartMgr.chart.timeScale().getVisibleLogicalRange();
-    return r.to - r.from;
+  // 回放条: 原来浮在图表底部居中, 现在钉在底栏左下角, 不浮动
+  const rbBox = await page.evaluate(() => {
+    const bar = document.getElementById('replayBar');
+    const fw = document.getElementById('bottomBar').getBoundingClientRect();
+    const r = bar.getBoundingClientRect();
+    const cs = getComputedStyle(bar);
+    return {
+      parent: bar.parentElement.id, pos: cs.position, shadow: cs.boxShadow,
+      inFooter: r.top >= fw.top - 1 && Math.abs(r.bottom - fw.bottom) <= 6,
+      fromLeft: Math.round(r.left - fw.left),
+      hidden: bar.classList.contains('hidden'),
+    };
   });
-  await page.click('#rangeGroup button[data-range="all"]');
-  await page.waitForTimeout(300);
-  const rall = await page.evaluate(() => {
-    const r = ChartMgr.chart.timeScale().getVisibleLogicalRange();
-    return r.to - r.from;
-  });
-  check('区间按钮改变视窗', r1d > 0 && rall > r1d, '1天=' + Math.round(r1d) + ' 全部=' + Math.round(rall));
+  check('回放条钉在底栏左下角(不浮动 / 无阴影)',
+        rbBox.parent === 'bottomBar' && rbBox.pos === 'static' && rbBox.shadow === 'none'
+        && rbBox.inFooter && rbBox.fromLeft <= 12 && !rbBox.hidden,
+        JSON.stringify(rbBox));
+  check('底栏只剩状态条(区间按钮已删)',
+        await page.evaluate(() => !document.getElementById('rangeGroup')
+          && !document.getElementById('replayTradeBtn')), '');
 
   // 右下状态条
   const st = await page.evaluate(() => ({
@@ -1399,6 +1427,41 @@ const waitLoaded = page => page.waitForFunction(
   await page.waitForTimeout(200);
   check('纯横向拖动不会关掉自动缩放', (await autoOn()) === true, 'autoScale=' + await autoOn());
   await page.evaluate(() => ChartMgr.chart.priceScale('right').applyOptions({ autoScale: true }));
+
+  /* 18. 记住上次位置: 重开回放默认回到上次那个时间 */
+  const resumeSaved = await page.evaluate(() => {
+    const idx = Math.max(0, App.engine.idx - 37);
+    App.engine.seek(idx);
+    App.savePos();
+    return new Promise(r => setTimeout(() => r({
+      idx: App.engine.idx, tf: App.tf,
+      time: document.getElementById('replayTime').textContent.trim(),
+    }), 450));
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.waitForFunction(() => {
+    const n = document.getElementById('dataRangeNote');
+    return n && n.textContent && !n.textContent.includes('加载中');
+  }, { timeout: 20000 });
+  const resumeModal = await page.evaluate(() => ({
+    active: (document.querySelector('#modeSeg button.active') || {}).dataset?.mode,
+    note: document.getElementById('resumeNote').textContent.trim(),
+    rowShown: getComputedStyle(document.getElementById('resumeRow')).display !== 'none',
+  }));
+  check('重开时弹窗默认「继续上次」, 并显示上次时间',
+        resumeModal.active === 'resume' && resumeModal.rowShown
+        && resumeModal.note.includes(resumeSaved.time.slice(0, 16)),
+        JSON.stringify(resumeModal) + ' vs ' + resumeSaved.time);
+  await page.click('#startBtn');
+  await waitLoaded(page);
+  await page.waitForTimeout(600);
+  const resumed = await page.evaluate(() => ({
+    idx: App.engine.idx, tf: App.tf,
+    time: document.getElementById('replayTime').textContent.trim(),
+  }));
+  check('继续上次落在同一根 K 线上',
+        resumed.idx === resumeSaved.idx && resumed.tf === resumeSaved.tf,
+        `idx ${resumeSaved.idx}→${resumed.idx} · ${resumeSaved.time} / ${resumed.time}`);
 
   /* 15. 截图 + 错误汇总 */
   await page.click('#btnRestart');
