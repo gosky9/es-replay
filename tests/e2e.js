@@ -82,7 +82,7 @@ const waitLoaded = page => page.waitForFunction(
         && bw.border === '#131722' && bw.vis === true, JSON.stringify(bw));
 
   /* Bar Count: 按当日重置 + 每 2 根显示一次 */
-  const bcInfo = await page.evaluate(() => {
+  const bcInfo = await page.evaluate(async () => {
     const bars = App.bars, i = App.engine.idx, firsts = [];
     for (let k = 0; k <= i; k++) {
       if (bars[k].dayNo === 1) {
@@ -90,11 +90,17 @@ const waitLoaded = page => page.waitForFunction(
         firsts.push(d.getUTCHours() * 60 + d.getUTCMinutes());
       }
     }
+    /* 数字现在由 series 图元在图表自己的渲染循环里画, 所以不能靠 Draw.render() 触发,
+       要请求重画一帧再等它真的画完(两个 rAF: 一个是库的排帧, 一个是合成帧)。 */
     const calls = [];
     const proto = CanvasRenderingContext2D.prototype;
     const orig = proto.fillText;
-    proto.fillText = function (t, x, y) { if (/^\d+$/.test(t)) calls.push(+t); return orig.call(this, t, x, y); };
-    Draw.render();
+    proto.fillText = function (t, x, y) {
+      if (/^\d+$/.test(t) && +t > 0 && +t <= 400) calls.push(+t);   // 排除坐标轴年份等纯数字刻度
+      return orig.call(this, t, x, y);
+    };
+    ChartMgr.refreshBarCount();
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     proto.fillText = orig;
     return {
       firsts: firsts.slice(0, 8), nFirst: firsts.length,

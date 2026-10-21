@@ -205,7 +205,11 @@ const Draw = {
 
   toggleMagnet() { this.magnet = !this.magnet; return this.magnet; },
   toggleHide() { this.hidden = !this.hidden; this.render(); return this.hidden; },
-  toggleBarCount() { this.showBarCount = !this.showBarCount; this.render(); return this.showBarCount; },
+  toggleBarCount() {
+    this.showBarCount = !this.showBarCount;
+    ChartMgr.refreshBarCount();        // 图元内容现算, 只需请求重画一帧
+    return this.showBarCount;
+  },
 
   addItem(it) {
     it.id = this.seq++;
@@ -561,7 +565,7 @@ const Draw = {
     ctx.clearRect(0, 0, this.W, this.H);
     if (!App.engine) return;
 
-    if (this.showBarCount) this.drawBarNumbers(ctx);
+    // Bar Count 已改为挂在 series 上的图元(见 chart.js), 跟 K 线同帧绘制, 这里不再画
     this.drawOrderLines(ctx);          // 交易线不受"隐藏绘图"影响
     if (this.hidden) return;
 
@@ -899,45 +903,8 @@ const Draw = {
     }
   },
 
-  /** Bar Count 指标: 当日序号 (RTH 按自然日 / ETH 按 CME 交易日, 每日首根=1)
-     *  默认每 2 根显示一次(2/4/6…, 1/3/5 不显示), 缩得太小时再成倍稀疏
-     */
-  drawBarNumbers(ctx) {
-    const bars = ChartMgr._lastData;
-    if (!bars || !bars.length) return;
-    const r = ChartMgr.visibleRange();
-    if (!r) return;
-    const from = Math.max(0, Math.floor(r.from));
-    const to = Math.min(bars.length - 1, Math.ceil(r.to));
-    if (to < from) return;
-    let spacing = 7;
-    try { spacing = ChartMgr.chart.timeScale().options().barSpacing || 7; } catch (e) {}
-    const every = spacing >= 5 ? 2 : spacing >= 3.5 ? 4 : 8;
-
-    const yMax = this._priceAreaHeight();
-    const bg = ChartMgr.themeColors().bg;
-    ctx.save();
-    ctx.font = '500 9px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = bg;                  // 主题色描边, 数字压在 K 线上也能看清
-    // 参考截图中 Bar Count 序号是橙色 (TradingView 默认), 与黑白盘面不冲突
-    ctx.fillStyle = ChartMgr.theme === 'dark' ? '#ffab40' : '#ff9800';
-    for (let i = from; i <= to; i += 1) {
-      const b = bars[i];
-      const n = b && b.dayNo ? b.dayNo : 0;
-      if (!n || n % every !== 0) continue;
-      const x = this.xOf(b.t);
-      const yl = this.yOf(b.l);
-      if (x == null || yl == null || yl > yMax - 12) continue;
-      const s = String(n);
-      ctx.strokeText(s, x, yl + 5);
-      ctx.fillText(s, x, yl + 5);
-    }
-    ctx.restore();
-  },
+  /* Bar Count (当日序号) 已迁到 chart.js 的 series 图元 BarCountPrimitive:
+     跟着图表自己的渲染循环画, 不会比 K 线慢一帧。 */
 
   drawItem(ctx, it, selected, isDraft) {
     const ax = this.xOf(it.a.t), ay = this.yOf(it.a.p);

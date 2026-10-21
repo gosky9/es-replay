@@ -85,7 +85,8 @@ const App = {
     });
     $('indBarCount').addEventListener('change', e => {
       Draw.showBarCount = e.target.checked;
-      Draw.render(); this.syncToolUI();
+      ChartMgr.refreshBarCount();      // Bar Count 是 series 图元, 请求重画即可
+      this.syncToolUI();
     });
     $('gridBtn').addEventListener('click', () => {
       this.gridOn = !this.gridOn;

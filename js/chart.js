@@ -1,4 +1,74 @@
 /* ============ chart.js — lightweight-charts v5 封装 (TradingView 风格) ============ */
+
+/* ---------------- Bar Count 图元 ----------------
+   为什么挂在 series 上, 而不是画在我们自己的 #drawLayer 里:
+   那张 canvas 是独立的 requestAnimationFrame 重绘, 跟图表自己的渲染循环差一帧 ——
+   拖动/缩放/回放时数字会"脱影"、"不跟"; 而且每帧要为几百根 K 线走一遍 timeToCoordinate。
+   作为 pane 图元放进 lightweight-charts 的渲染管线后, 和 K 线同一帧、同一套坐标:
+   天然同步, 也不额外开渲染循环。 */
+const BarCountView = {
+  zOrder() { return 'top'; },                 // 压在 K 线之上
+  renderer() { return { draw: target => drawBarCounts(target) }; },
+};
+
+const BarCountPrimitive = {
+  _chart: null, _series: null, _req: null,
+  _views: [BarCountView],                     // 固定数组: 库会用 === 比对来复用视图, 每次新建会白走一遍
+  attached(p) { this._chart = p.chart; this._series = p.series; this._req = p.requestUpdate; },
+  detached() { this._chart = null; this._series = null; this._req = null; },
+  updateAllViews() {},
+  paneViews() { return this._views; },
+  /** 开关/配色变了, 让图表重画一帧(图元内容由 drawBarCounts 每次现算) */
+  refresh() { if (this._req) this._req(); },
+};
+
+function drawBarCounts(target) {
+  if (typeof Draw !== 'undefined' && !Draw.showBarCount) return;
+  const bars = ChartMgr._lastData;
+  const chart = BarCountPrimitive._chart, series = BarCountPrimitive._series;
+  if (!bars || !bars.length || !chart || !series) return;
+  const ts = chart.timeScale();
+  const lr = ts.getVisibleLogicalRange();
+  if (!lr) return;
+
+  // 密度: 默认每 2 根显示一次(2/4/6…), 缩小时成倍稀疏, 再密就整体不画(与 TV 一致)
+  const spacing = ts.options().barSpacing || 7;
+  let every;
+  if (spacing >= 5) every = 2;
+  else if (spacing >= 3.2) every = 4;
+  else if (spacing >= 2) every = 8;
+  else return;
+
+  const i0 = Math.max(0, Math.floor(lr.from));
+  const i1 = Math.min(bars.length - 1, Math.ceil(lr.to));
+  if (i1 < i0) return;
+
+  const dark = ChartMgr.theme === 'dark';
+  target.useBitmapCoordinateSpace(scope => {
+    const ctx = scope.context;
+    const hrp = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
+    const H = scope.bitmapSize.height / vpr;          // 画布高度(CSS px)
+    ctx.save();
+    ctx.scale(hrp, vpr);                             // 之后按 CSS px 画
+    ctx.font = '500 10px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = dark ? '#ffab40' : '#ff9800';     // TV 的 Bar Count 是橙色
+    for (let i = i0; i <= i1; i++) {
+      const b = bars[i];
+      const n = b && b.dayNo;
+      if (!n || n % every !== 0) continue;
+      const y = series.priceToCoordinate(b.l);
+      // 上下都要判: 旧版只判了"低于下边界", K 线跑到视窗上方时数字会飘在顶上
+      if (y == null || y < 0 || y > H - 12) continue;
+      const x = ts.logicalToCoordinate(i);
+      if (x == null) continue;
+      ctx.fillText(String(n), x, y + 4);             // 不再描边: TV 就是纯色字, 少一遍文字绘制
+    }
+    ctx.restore();
+  });
+}
+
 const ChartMgr = {
   chart: null, candle: null, ema: null, markersPlugin: null,
   priceLine: null, posLine: null,
@@ -117,6 +187,9 @@ const ChartMgr = {
     // v5: 成交标记是独立 primitive(不再是 series.setMarkers), 构造时自动 attach
     this.markersPlugin = LightweightCharts.createSeriesMarkers(this.candle, []);
 
+    // Bar Count 也走图元: 跟 K 线同帧绘制, 不会脱影
+    this.candle.attachPrimitive(BarCountPrimitive);
+
     // 注: 参考截图里没有成交量副图, 用户也明确说"删了成交量, 我不需要" => 不建 HistogramSeries
     // 参考截图: EMA 是黑色细线 + 右侧价格轴黑底数值标签 (不是橙色)
     this.ema = this.chart.addSeries(LightweightCharts.LineSeries, {
@@ -219,6 +292,9 @@ const ChartMgr = {
   visibleRange() {
     try { return this.chart.timeScale().getVisibleLogicalRange(); } catch (e) { return null; }
   },
+
+  /** Bar Count 开关/配色变化后重画一帧 */
+  refreshBarCount() { BarCountPrimitive.refresh(); },
 
   /**
    * 全量替换数据
