@@ -10,6 +10,7 @@ _cmp_*.png
 _v*_*.png
 _z_*.png
 _smoke*.js
+_perf*.js
 _smoke*.py
 _cmp*.py
 _crop*.py
