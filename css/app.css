@@ -212,12 +212,16 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
   position: absolute; top: 8px; left: 10px; z-index: 12;
   display: flex; flex-direction: column; gap: 3px;
   font-size: 12px; pointer-events: none; line-height: 1.3;
+  font-variant-numeric: tabular-nums;   /* 等宽数字: 悬停换 K 线时数值宽度不跳 */
 }
 #legend button { pointer-events: auto; }
 .lg-row { display: flex; align-items: center; gap: 7px; }
 
 /* 第 1 行: 500 徽标 + 品种名 + 旗 + 回放 + 开高低收 */
-.lg-head { gap: 6px; }
+/* 窄窗口不换行: 让品种名先省略号, 保证 开/高/低/收 永远和它同一行 (TradingView 也是这样截断的) */
+.lg-head { gap: 6px; flex-wrap: nowrap; min-width: 0; }
+.lg-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lg-ohlc { flex: none; white-space: nowrap; }
 .lg-badge {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 20px; height: 14px; padding: 0 3px; border-radius: 7px;
@@ -537,27 +541,28 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
 .ind-menu input { accent-color: var(--accent); cursor: pointer; }
 
 /* ---------- 顶部浮层: 图例 + 收藏白条 同一行 ---------- */
+/* 图例和收藏条都绝对定位: 图例文字宽度随鼠标悬停的 K 线变化, 收藏条不能跟着左右乱挪 */
 #topOverlay {
   position: absolute; top: 3px; left: 8px; right: 8px; z-index: 13;
-  display: flex; align-items: flex-start; gap: 16px;
   pointer-events: none;
 }
 #topOverlay > * { pointer-events: auto; }
-#topOverlay #legend { position: static; }
+/* 收藏条现在固定在右上角, 所以给图例让出它的宽度; 窄窗口时开/高/低/收 自己换到第二行, 不互相压 */
+#topOverlay #legend { position: absolute; top: 5px; left: 2px; max-width: calc(100% - 396px); }
 
-/* 收藏白条: 圆角悬浮, 不再是通栏; 可按住左侧六点拖动到任意位置 */
-/* 尺寸按 reference/17 实测折算: 截图是 2x, 条实体高 33.5 / 图标槽距 34 / 图标墨迹 19.5~23 CSS px */
+/* 收藏白条: 照 reference/17+18 实测 —— 直角(圆角 6px, 不是胶囊) / 无描边 / 只有投影
+   高度 34, 图标槽距 34, 图标盒 28; 阴影: 下边缘 212 灰度起, 6 CSS px 内淡出 */
 #drawBar {
-  position: relative; left: 0; top: 0;
+  position: absolute; top: 0; right: 0;
   display: flex; align-items: center; gap: 2px; flex: none;
   height: 34px; padding: 0 6px 0 4px;
   background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 17px;
-  box-shadow: 0 1px 4px rgba(19,23,34,.10);
+  border: 0;
+  border-radius: 6px;
+  box-shadow: 0 2px 6px rgba(19,23,34,.18), 0 0 0 1px rgba(19,23,34,.03);
   overflow: hidden;
 }
-#drawBar.dragging { box-shadow: 0 4px 14px rgba(19,23,34,.20); cursor: grabbing; }
+#drawBar.dragging { box-shadow: 0 5px 16px rgba(19,23,34,.26); cursor: grabbing; }
 .db-grip {
   width: 16px; height: 26px; display: inline-flex; align-items: center;
   justify-content: center; color: var(--border-strong); cursor: grab; flex: none;

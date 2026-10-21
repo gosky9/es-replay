@@ -201,6 +201,51 @@ const ChartMgr = {
     ro.observe(document.getElementById('chartWrap'));
 
     this.chart.subscribeCrosshairMove(param => this.onCrosshair(param));
+    this.bindPanTuning();
+  },
+
+  _axisW() {
+    try { return this.chart.priceScale('right').width() || 60; } catch (e) { return 60; }
+  },
+
+  /* ---------- 纵向拖动: 不必先去价格轴上拉一下 ----------
+     lightweight-charts 在 autoScale 打开时每帧重算价格区间, 纵向拖动完全无效,
+     必须先手动缩放过价格轴(退出 autoScale)才能上下拖。
+     TradingView 的观感是不用先拉轴; 这里改成: 只要这一下手势以纵向为主, 就立刻退出 autoScale,
+     剩下的交给库自己走完 (实测库在 autoScale=false 时纵向拖动正常)。
+     恢复自动: 双击右侧价格轴 (库自带 axisDoubleClickReset)。 */
+  bindPanTuning() {
+    const area = document.getElementById('chartArea');
+    if (!area || this._panBound) return;
+    this._panBound = true;
+    let start = null;
+
+    const onDown = e => {
+      if (e.button !== 0) return;
+      const d = (typeof Draw !== 'undefined') ? Draw : null;
+      if (d && d.tool !== 'cursor') return;                    // 正在用绘图工具
+      const r = area.getBoundingClientRect();
+      if (d && (d.hitTest(e.clientX - r.left, e.clientY - r.top) || d.hitOrder(e.clientY - r.top))) return;
+      if (!this.chart.priceScale('right').options().autoScale) return;   // 已经是手动缩放态
+      start = { x: e.clientX, y: e.clientY };
+    };
+
+    const onMove = e => {
+      if (!start) return;
+      const dx = Math.abs(e.clientX - start.x), dy = Math.abs(e.clientY - start.y);
+      if (dx < 3 && dy < 3) return;
+      const s = start; start = null;
+      if (dy > dx) {
+        this.chart.priceScale('right').applyOptions({ autoScale: false });
+        if (typeof App !== 'undefined' && App.toast) App.toast('价格轴已退出自动缩放 · 双击价格轴可恢复');
+      }
+    };
+
+    area.addEventListener('mousedown', onDown, true);
+    area.addEventListener('mousemove', onMove, true);
+    const clear = () => { start = null; };
+    area.addEventListener('mouseup', clear, true);
+    area.addEventListener('mouseleave', clear, true);
   },
 
   resize() {
@@ -263,7 +308,7 @@ const ChartMgr = {
   RIGHT_BLANK: 0.5,
 
   /** 显示最近 n 根, 靠左 2/3, 右侧 1/3 留空 (新图初始状态 / 换一段 / 重置) */
-  fitRecent(n = 180) {
+  fitRecent(n = 100) {
     const total = this._lastData ? this._lastData.length : 0;
     if (!total) return;
     const shown = Math.min(n, total);

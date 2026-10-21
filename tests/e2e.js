@@ -60,6 +60,14 @@ const waitLoaded = page => page.waitForFunction(
         && defaults.mtf === '5m' && defaults.mses === 'rth'
         && defaults.activeTf === '5m' && defaults.activeSes === 'rth', JSON.stringify(defaults));
 
+  /* 刚进来: 默认显示 100 根 (用户要求, 原来 180 根太挤) */
+  const initBars = await page.evaluate(() => {
+    const lr = ChartMgr.visibleRange();
+    const n = ChartMgr._lastData.length;
+    return Math.round(Math.min(n - 1, lr.to) - Math.max(0, lr.from));
+  });
+  check('刚进来显示 100 根 K 线', initBars === 100, initBars + ' 根');
+
   /* 刚进来: K 线靠左 2/3, 右侧 1/3 留白 (不再贴死右边缘) */
   const blankPct = () => page.evaluate(() => {
     const ts = ChartMgr.chart.timeScale();
@@ -190,6 +198,21 @@ const waitLoaded = page => page.waitForFunction(
         await page.textContent('#stPos') + ' 记录' + await page.textContent('#tradeCount'));
   check('成交标记', (await page.evaluate(() => ChartMgr.markers.length)) === 1);
   check('浮动盈亏', /\$/.test(await page.textContent('#stFloat')), await page.textContent('#stFloat'));
+
+  /* 交易线上的牌子按"点"显示 (不是美元): 1 点 = $50, 所以点数 = 价格差 */
+  const ptsChip = await page.evaluate(() => {
+    const e = Draw.orderLines().find(o => o.key === 'entry');
+    const last = ChartMgr._lastData[ChartMgr._lastData.length - 1].c;
+    return {
+      txt: Draw._fmtPts(e.pts), pts: e.pts, plUsdLeft: e.pl,
+      expect: Trading.pos > 0 ? last - Trading.avg : Trading.avg - last,
+    };
+  });
+  check('盈亏牌子显示"点"而不是美元',
+        /点$/.test(ptsChip.txt) && !/USD/.test(ptsChip.txt)
+        && ptsChip.plUsdLeft === undefined
+        && Math.abs(ptsChip.pts - ptsChip.expect) < 1e-9,
+        ptsChip.txt + ' / pts=' + ptsChip.pts.toFixed(2));
 
   /* 配色按国际惯例: 多=绿 / 空=红, 盈=绿 / 亏=红 */
   const cls = await page.evaluate(() => {
@@ -322,7 +345,7 @@ const waitLoaded = page => page.waitForFunction(
 
   check('收藏工具横条可见', await page.isVisible('#drawBar'));
   const dbarN = await page.evaluate(() => document.querySelectorAll('#drawBar button[data-tool]').length);
-  check('收藏横条按钮数(趋势线/水平线/矩形/斐波那契/文字/尺子/磁吸/隐藏/清空)', dbarN === 9, String(dbarN) + ' 个');
+  check('收藏横条按钮数(尺子/趋势线/斐波那契/扩展/水平线/矩形/文字/磁吸/隐藏/清空)', dbarN === 10, String(dbarN) + ' 个');
 
   // 尺寸对齐 reference/17: TV 截图是 2x, 折半后 条实体高 33.5 / 槽距 34 / 图标墨迹 19.5~23
   const dbarGeo = await page.evaluate(() => {
@@ -339,24 +362,57 @@ const waitLoaded = page => page.waitForFunction(
     dbarGeo.h === 34 && dbarGeo.pitch === 34 && dbarGeo.svg === 28,
     `高${dbarGeo.h} 槽距${dbarGeo.pitch} 图标${dbarGeo.svg}`);
 
+  // 收藏条顺序: 尺子 / 趋势线 / 斐波那契 / 斐波那契扩展 打头
+  const dbarOrder = await page.evaluate(() =>
+    [...document.querySelectorAll('#drawBar .dbtn')].map(b => b.dataset.tool));
+  check('收藏栏顺序: 尺子/趋势线/斐波那契/扩展 前四个',
+    JSON.stringify(dbarOrder.slice(0, 4)) === JSON.stringify(['measure', 'trend', 'fib', 'fibext']),
+    dbarOrder.join(','));
+
+  // 收藏条是方角 + 有投影 (照 reference/18: 圆角 6px, 无描边)
+  const dbarSkin = await page.evaluate(() => {
+    const cs = getComputedStyle(document.getElementById('drawBar'));
+    return { radius: cs.borderRadius, shadow: cs.boxShadow, bw: cs.borderTopWidth };
+  });
+  check('收藏条方角(6px) + 投影 + 无描边',
+    dbarSkin.radius === '6px' && dbarSkin.shadow !== 'none' && dbarSkin.bw === '0px',
+    JSON.stringify(dbarSkin));
+
+  // 鼠标扫过 K 线时图例会变, 但收藏条必须钉死在原地
+  const box0 = await page.locator('#chartMain').boundingBox();
+  const barLeft = () => page.evaluate(() =>
+    Math.round(document.getElementById('drawBar').getBoundingClientRect().left * 10) / 10);
+  const lefts = new Set();
+  for (let i = 0; i < 14; i++) {
+    await page.mouse.move(box0.x + 120 + i * 22, box0.y + 320);
+    await page.waitForTimeout(16);
+    lefts.add(await barLeft());
+  }
+  await page.mouse.move(box0.x + 5, box0.y + 5);
+  await page.waitForTimeout(60);
+  check('鼠标扫过 K 线时收藏条不动', lefts.size === 1, [...lefts].join(','));
+
   const toolGeo = await page.evaluate(() => {
     const svg = document.querySelector('#sideToolbar .tool svg').getBoundingClientRect();
     return { svg: Math.round(svg.width) };
   });
   check('左侧工具栏图标盒 28 (viewBox 56 单位 => 1 单位 0.5px)', toolGeo.svg === 28, String(toolGeo.svg));
 
-  // 图标不是手画的: 由 trace_icons.py 从 reference/17 的墨迹描出, 实心轮廓 + evenodd
+  // 图标不是手画的: 24 个由 trace_icons.py 从 reference/17 的墨迹描出(实心轮廓 + evenodd),
+  // 斐波那契扩展是纯几何图形, 按 reference/18 的像素坐标直接描成描边矢量(圆 + 直线), 不用描轮廓
   const traced = await page.evaluate(() => {
     const side = [...document.querySelectorAll('#sideToolbar .tool')]
       .filter(b => b.dataset.tool !== 'brush')
       .map(b => b.querySelector('svg'));
     const all = [...document.querySelectorAll('#drawBar .dbtn svg'), ...side];
-    const ok = all.every(s => s && s.getAttribute('viewBox') === '0 0 56 56'
-      && s.querySelector('path[fill-rule="evenodd"]'));
-    return { n: all.length, ok };
+    const viewOk = all.every(s => s && s.getAttribute('viewBox') === '0 0 56 56');
+    const filled = all.filter(s => s.querySelector('path[fill-rule="evenodd"]')).length;
+    const stroked = all.filter(s => s.getAttribute('stroke') === 'currentColor').length;
+    return { n: all.length, viewOk, filled, stroked };
   });
-  check('24 个图标都是按原图描出的轮廓(viewBox 56 / evenodd)', traced.ok && traced.n === 24,
-    `${traced.n} 个 ok=${traced.ok}`);
+  check('25 个图标都按原图像素标定(viewBox 56: 24 描轮廓 + 扩展描边)',
+    traced.viewOk && traced.n === 25 && traced.filled === 24 && traced.stroked === 1,
+    `${traced.n} 个 viewBox ok=${traced.viewOk} 描轮廓${traced.filled} 描边${traced.stroked}`);
 
   const box = await page.locator('#chartMain').boundingBox();
   const P = (dx, dy) => ({ x: box.x + dx, y: box.y + dy });
@@ -887,6 +943,71 @@ const waitLoaded = page => page.waitForFunction(
         hasFibBtn && fibTool === 'fib' && fibDrawn.types.includes('fib') && fibDrawn.tool === 'cursor',
         `btn=${hasFibBtn} tool=${fibTool} items=${JSON.stringify(fibDrawn.types)}`);
 
+  /* ⑧b 斐波那契扩展: 按 reference/18 三次点击 A→B→C, 级别 = pC + k*(pB-pA), 只画 0/1/2 */
+  await page.evaluate(() => { Draw.clearAll(); Draw.setTool('cursor'); });
+  const hasExtBtn = !!(await page.$('#drawBar button[data-tool="fibext"]'));
+  await page.click('#drawBar button[data-tool="fibext"]');
+  const extTool = await page.evaluate(() => Draw.tool);
+  // 用图表高度比例定位三个点, 避免价格高低把点推到画布外
+  const hArea = await page.evaluate(() => Draw._priceAreaHeight());
+  const exY = f => Math.round(hArea * f);
+  await page.mouse.click(cvF.x + 260, cvF.y + exY(0.25));   // A
+  await page.waitForTimeout(110);
+  await page.mouse.click(cvF.x + 430, cvF.y + exY(0.62));   // B
+  await page.waitForTimeout(110);
+  await page.mouse.move(cvF.x + 640, cvF.y + exY(0.38));    // 预览 C
+  await page.waitForTimeout(90);
+  const draftC = await page.evaluate(() => !!(Draw.draft && Draw.draft.stage === 2));
+  await page.mouse.click(cvF.x + 640, cvF.y + exY(0.38));   // C
+  await page.waitForTimeout(200);
+  const ext = await page.evaluate(() => {
+    const it = Draw.items.find(i => i.type === 'fibext');
+    if (!it) return null;
+    const lv = it.levels || Draw.FIBEXT;
+    const px = lv.map(k => it.c.p + (it.b.p - it.a.p) * k);
+    return {
+      levels: lv, nPts: [it.a, it.b, it.c].filter(Boolean).length,
+      tool: Draw.tool, px,
+      // 相邻级别价差必须完全相等 (这就是 pC + k*(pB-pA) 的定义)
+      stepsEqual: Math.abs((px[1] - px[0]) - (px[2] - px[1])) < 1e-9,
+      step: px[1] - px[0], ab: it.b.p - it.a.p,
+    };
+  });
+  check('斐波那契扩展: 三点画出 + 级别 0/1/2',
+        hasExtBtn && extTool === 'fibext' && draftC && !!ext && ext.nPts === 3
+        && JSON.stringify(ext.levels) === '[0,1,2]' && ext.tool === 'cursor',
+        `btn=${hasExtBtn} tool=${extTool} stage2=${draftC} ` + JSON.stringify(ext && ext.levels));
+  check('扩展级别价差 = A→B 的 1 个单位 (pC + k*(pB-pA))',
+        !!ext && ext.stepsEqual && Math.abs(ext.step - ext.ab) < 1e-9,
+        ext ? `step=${ext.step.toFixed(4)} AB=${ext.ab.toFixed(4)}` : 'none');
+
+  // 三个锚点都能单独拖动
+  const extDrag = await page.evaluate(() => {
+    const it = Draw.items.find(i => i.type === 'fibext');
+    if (!it) return null;
+    const cpx = Draw._px(it.c);
+    return { p0: it.c.p, a0: it.a.p, b0: it.b.p, cx: cpx.x, cy: cpx.y };
+  });
+  if (!extDrag) {
+    check('扩展的 C 锚点可单独拖动(其余两点不动)', false, '没有 fibext 图元可拖');
+  } else {
+    await page.mouse.move(cvF.x + extDrag.cx, cvF.y + extDrag.cy);
+    await page.mouse.down();
+    await page.mouse.move(cvF.x + extDrag.cx, cvF.y + extDrag.cy + 45);
+    await page.mouse.up();
+    await page.waitForTimeout(180);
+    const extAfter = await page.evaluate(() => {
+      const it = Draw.items.find(i => i.type === 'fibext');
+      return { c: it.c.p, a: it.a.p, b: it.b.p };
+    });
+    check('扩展的 C 锚点可单独拖动(其余两点不动)',
+          Math.abs(extAfter.c - extDrag.p0) > 0.5
+          && Math.abs(extAfter.a - extDrag.a0) < 1e-9
+          && Math.abs(extAfter.b - extDrag.b0) < 1e-9,
+          `C ${extDrag.p0.toFixed(2)} → ${extAfter.c.toFixed(2)}`);
+  }
+  await page.evaluate(() => Draw.clearAll());
+
   /* ⑨ 中键点中绘图直接删掉, 不必先左键选中再按 Delete */
   const midGeo = await page.evaluate(() => {
     Draw.clearAll(); Draw.setTool('cursor');
@@ -943,6 +1064,38 @@ const waitLoaded = page => page.waitForFunction(
         stClosed.modal === 'none' && stClosed.playing === true && stClosed.n === 1,
         JSON.stringify({ stOpen, stClosed }));
   await page.evaluate(() => { App.engine.pause(); Draw.clearAll(); });
+
+  /* ⑪ 纵向拖动: 不必先去右侧价格轴上拉一下, 直接上下拖就能动 */
+  const panGeo = await page.locator('#chartMain').boundingBox();
+  const priceRange = () => page.evaluate(() => {
+    const p = ChartMgr.candle.priceScale().getVisibleRange();
+    return p ? [+p.from.toFixed(2), +p.to.toFixed(2)] : null;
+  });
+  const autoOn = () => page.evaluate(() => ChartMgr.chart.priceScale('right').options().autoScale);
+  const wasAuto = await autoOn();
+  const pr0 = await priceRange();
+  const pcx = panGeo.x + panGeo.width * 0.5, pcy = panGeo.y + panGeo.height * 0.55;
+  await page.mouse.move(pcx, pcy);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) { await page.mouse.move(pcx, pcy - i * 9); await page.waitForTimeout(16); }
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  const pr1 = await priceRange();
+  const autoAfter = await autoOn();
+  check('不用先拉价格轴, 直接上下拖就能纵向平移',
+        wasAuto === true && autoAfter === false && pr0 && pr1 && Math.abs(pr1[0] - pr0[0]) > 0.2,
+        `auto ${wasAuto}→${autoAfter} · ${JSON.stringify(pr0)}→${JSON.stringify(pr1)}`);
+
+  // 纯横向拖不应把价格轴踢出自动缩放
+  await page.evaluate(() => ChartMgr.chart.priceScale('right').applyOptions({ autoScale: true }));
+  await page.waitForTimeout(120);
+  await page.mouse.move(pcx, pcy);
+  await page.mouse.down();
+  for (let i = 1; i <= 8; i++) { await page.mouse.move(pcx - i * 10, pcy); await page.waitForTimeout(16); }
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  check('纯横向拖动不会关掉自动缩放', (await autoOn()) === true, 'autoScale=' + await autoOn());
+  await page.evaluate(() => ChartMgr.chart.priceScale('right').applyOptions({ autoScale: true }));
 
   /* 15. 截图 + 错误汇总 */
   await page.click('#btnRestart');

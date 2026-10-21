@@ -23,6 +23,8 @@ const Draw = {
   BAR_IDX_COLOR: '#f7a600',
   /** 斐波那契级别 (照 reference/06 截图: 1 / 0 / -1 / -2, 价格 = pB + (pA-pB)*级别) */
   FIB: [1, 0, -1, -2],
+  /** 斐波那契扩展级别 (照 reference/18 截图: 只画 0 / 1 / 2, 价格 = pC + k*(pB-pA)) */
+  FIBEXT: [0, 1, 2],
   MIN_DRAW_PX: 4,
 
   init() {
@@ -171,6 +173,13 @@ const Draw = {
     return this.timeOfLogical(l);
   },
   pOf(y) { return ChartMgr.candle.coordinateToPrice(y); },
+
+  /** 一个 {t,p} 锚点 → 屏幕像素; 任一维取不到就返回 null */
+  _px(pt) {
+    if (!pt) return null;
+    const x = this.xOf(pt.t), y = this.yOf(pt.p);
+    return (x == null || y == null) ? null : { x, y };
+  },
 
   /** 磁吸: 吸附到最近 bar 的开高低收 */
   snapPrice(x, y) {
@@ -363,6 +372,27 @@ const Draw = {
     if (this.tool === 'vline') { this.pushHistory(); this.addItem({ type: 'vline', a: { t, p }, b: { t, p } }); this.setTool('cursor'); return; }
     if (this.tool === 'text') { this.startTextInput(x, y, t, p); return; }
 
+    // 三点工具 (斐波那契扩展): 第 1 点 A → 第 2 点 B → 第 3 点 C
+    if (this.tool === 'fibext') {
+      if (!this.draft) {
+        this.draft = { type: 'fibext', a: { t, p }, b: { t, p }, c: { t, p }, stage: 1 };
+        this.render();
+        if (typeof App !== 'undefined' && App.toast) App.toast('已定 A 点 · 再点 B 点 (A→B 为 1 个单位)');
+        return;
+      }
+      if (this.draft.stage === 1) {
+        this.draft.b = { t, p };
+        this.draft.c = { t, p };
+        this.draft.stage = 2;
+        this.render();
+        if (typeof App !== 'undefined' && App.toast) App.toast('已定 B 点 · 再点一下定 C 点 (0 级从 C 起算)');
+        return;
+      }
+      this.draft.c = { t, p };
+      this.finishDraft();
+      return;
+    }
+
     if (!this.draft) {
       this.draft = { type: this.tool, a: { t, p }, b: { t, p } };
       this.render();
@@ -384,6 +414,19 @@ const Draw = {
     const d = this.draft;
     this.draft = null;
     if (!d) return;
+    // 三点工具: A→B 要有长度, B→C 要有横向位移才算画成
+    if (d.type === 'fibext') {
+      const pa = this._px(d.a), pb = this._px(d.b), pc = this._px(d.c);
+      const ok = pa && pb && pc
+        && Math.hypot(pb.x - pa.x, pb.y - pa.y) >= this.MIN_DRAW_PX
+        && Math.abs(pc.x - pb.x) >= 2;
+      if (ok) {
+        this.pushHistory();
+        this.addItem({ type: 'fibext', a: d.a, b: d.b, c: d.c, levels: d.levels || this.FIBEXT.slice() });
+      }
+      this.setTool('cursor');
+      return;
+    }
     const x1 = this.xOf(d.a.t), x2 = this.xOf(d.b.t);
     const y1 = this.yOf(d.a.p), y2 = this.yOf(d.b.p);
     let ok = false;
@@ -407,6 +450,18 @@ const Draw = {
       e.stopPropagation();
       const t = this.timeAtX(x);
       const p = this.snapPrice(x, y);
+      // 三点工具: 定完 B 之后再移动就是拖 C; 还没定 B 时 B、C 一起跟手
+      if (this.draft.type === 'fibext') {
+        if (this.draft.stage === 2) {
+          if (t != null) this.draft.c = { t, p: p != null ? p : this.draft.c.p };
+        } else if (t != null) {
+          const pp = p != null ? p : this.draft.b.p;
+          this.draft.b = { t, p: pp };
+          this.draft.c = { t, p: pp };
+        }
+        this.render();
+        return;
+      }
       this.draft.b = {
         t: t != null ? t : this.draft.b.t,
         p: p != null ? this._lockShift(this.draft, p, e.shiftKey) : this.draft.b.p,
@@ -433,6 +488,18 @@ const Draw = {
       if (it.type === 'hline') { it.a.p = p; it.b.p = p; }
       else if (it.type === 'vline') { it.a.t = t; it.b.t = t; }
       else if (it.type === 'text') { it.a.t = t; it.a.p = p; }
+      else if (it.type === 'fibext') {
+        if (part === 'a') it.a = { t, p };
+        else if (part === 'b') it.b = { t, p };
+        else if (part === 'c') it.c = { t, p };
+        else {                                   // body: 三个点一起上下移
+          const o = this._drag.orig;
+          const dP = p - this.pOf(this._drag.startY);
+          it.a = { t: o.a.t, p: o.a.p + dP };
+          it.b = { t: o.b.t, p: o.b.p + dP };
+          it.c = { t: o.c.t, p: o.c.p + dP };
+        }
+      }
       else if (part === 'a') { it.a = { t, p }; }
       else if (part === 'b') { it.b = { t, p }; }
       else {  // body: 整体平移
@@ -526,6 +593,24 @@ const Draw = {
         }
         continue;
       }
+      if (it.type === 'fibext') {
+        const c = this._px(it.c);
+        if (ax != null && ay != null && dist(ax, ay) < TH + 2) return { id: it.id, part: 'a' };
+        if (bx != null && by != null && dist(bx, by) < TH + 2) return { id: it.id, part: 'b' };
+        if (c && dist(c.x, c.y) < TH + 2) return { id: it.id, part: 'c' };
+        if (ax == null || ay == null || bx == null || by == null || !c) continue;
+        if (this._distSeg(x, y, ax, ay, bx, by) < TH) return { id: it.id, part: 'body' };
+        if (this._distSeg(x, y, bx, by, c.x, c.y) < TH) return { id: it.id, part: 'body' };
+        // 级别横线 (x 从 B 到 C)
+        const lx0 = Math.min(bx, c.x), lx1 = Math.max(bx, c.x);
+        if (x > lx0 - TH && x < lx1 + TH) {
+          for (const lv of (it.levels || this.FIBEXT)) {
+            const yy = this.yOf(it.c.p + (it.b.p - it.a.p) * lv);
+            if (yy != null && Math.abs(y - yy) < TH) return { id: it.id, part: 'body' };
+          }
+        }
+        continue;
+      }
       if (ax == null || ay == null || bx == null || by == null) continue;
       if (dist(ax, ay) < TH + 2) return { id: it.id, part: 'a' };
       if (dist(bx, by) < TH + 2) return { id: it.id, part: 'b' };
@@ -585,25 +670,26 @@ const Draw = {
       out.push({
         key: 'stop:' + s.id, price: s.price, kind: 'stop', qty: s.qty,
         color: s.side === 'buy' ? '#2962ff' : '#f23645',
-        label: s.side === 'buy' ? '突破买' : '突破卖', pl: null, solid: true,
+        label: s.side === 'buy' ? '突破买' : '突破卖', pts: null, solid: true,
       });
     }
     if (pos !== 0) {
       const n = Math.abs(pos), long = pos > 0;
-      const plAt = p => (long ? p - Trading.avg : Trading.avg - p) * n * mult;
+      // 牌子上的盈亏改按"点"显示 (用户要求): 一点 = $50, 即价格走了几个点
+      const ptsAt = p => (long ? p - Trading.avg : Trading.avg - p);
       const last = (ChartMgr._lastData || []);
       const cur = last.length ? last[last.length - 1].c : Trading.avg;
       out.push({
         key: 'entry', price: Trading.avg, kind: 'entry', qty: n,
-        color: '#2962ff', label: '', pl: plAt(cur), solid: true,
+        color: '#2962ff', label: '', pts: ptsAt(cur), solid: true,
       });
       if (Trading.tp != null) out.push({
         key: 'tp', price: Trading.tp, kind: 'tp', qty: n,
-        color: '#089981', label: '', pl: plAt(Trading.tp), solid: false,
+        color: '#089981', label: '', pts: ptsAt(Trading.tp), solid: false,
       });
       if (Trading.sl != null) out.push({
         key: 'sl', price: Trading.sl, kind: 'sl', qty: n,
-        color: '#ff9800', label: '', pl: plAt(Trading.sl), solid: false,
+        color: '#ff9800', label: '', pts: ptsAt(Trading.sl), solid: false,
       });
     }
     return out;
@@ -695,12 +781,12 @@ const Draw = {
     try { return ChartMgr.chart.priceScale('right').width() || 60; } catch (e) { return 60; }
   },
 
-  /** 美元盈亏: 0.00 / +275.00 / -212.50 */
-  _fmtUsd(v) {
+  /** 点数盈亏: 0.00 / +12.00 / -8.25 (ES 1 点 = 50 美元, 这里只显示价格走了多少点) */
+  _fmtPts(v) {
     if (v == null || !isFinite(v)) return '—';
-    const a = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    if (Math.abs(v) < 0.005) return '0.00 USD';
-    return (v > 0 ? '+' : '-') + a + ' USD';
+    const a = Math.abs(v).toFixed(2);
+    if (Math.abs(v) < 0.005) return '0.00 点';
+    return (v > 0 ? '+' : '-') + a + ' 点';
   },
 
   /** 右侧小牌: [◀ N] | 内容 | ✕   —— 照 reference/10~13 截图 */
@@ -714,7 +800,7 @@ const Draw = {
     const leftTxt = '◀ ' + o.qty;
     const wl = Math.ceil(ctx.measureText(leftTxt).width) + 18;
     ctx.font = '500 11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
-    const midTxt = (o.pl != null) ? this._fmtUsd(o.pl) : (o.label || '');
+    const midTxt = (o.pts != null) ? this._fmtPts(o.pts) : (o.label || '');
     const wm = Math.ceil(ctx.measureText(midTxt).width) + 22;
     const wc = 26;
     const W = wl + wm + wc;
@@ -842,11 +928,11 @@ const Draw = {
       const dir = pos > 0 ? '#2962ff' : '#f23645';
       const entry = list.find(o => o.key === 'entry');
       // 先量牌子宽度, 才能把 pill / 圆往左排
-      const probe = { key: 'entry', qty: entry.qty, color: dir, pl: entry.pl, solid: true, label: '' };
+      const probe = { key: 'entry', qty: entry.qty, color: dir, pts: entry.pts, solid: true, label: '' };
       ctx.font = '700 11px -apple-system, "Segoe UI", sans-serif';
       const wl0 = Math.ceil(ctx.measureText('◀ ' + probe.qty).width) + 18;
       ctx.font = '500 11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
-      const wm0 = Math.ceil(ctx.measureText(this._fmtUsd(probe.pl)).width) + 22;
+      const wm0 = Math.ceil(ctx.measureText(this._fmtPts(probe.pts)).width) + 22;
       const chipW = wl0 + wm0 + 26;
       const chipX = chipRight - chipW;
 
@@ -1001,6 +1087,57 @@ const Draw = {
       ctx.strokeStyle = it.color || this.COLOR;
       ctx.fillStyle = it.color || this.COLOR;
       if (selected) this.handles(ctx, [[ax, ay], [bx, by]]);
+    } else if (it.type === 'fibext') {
+      // 照 reference/18 截图:
+      //   浅灰虚线 A→B→C + 三个蓝色空心圆锚点
+      //   每个级别一条灰实线, 横向从 x(B) 拉到 x(C), 标签右对齐贴在线左端外侧
+      const cc = this._px(it.c);
+      if (ax == null || ay == null || bx == null || by == null || !cc) { ctx.restore(); return; }
+      const dark = ChartMgr.theme === 'dark';
+      const dashC = dark ? '#4a4e59' : '#cfcfcf';
+      const lineC = dark ? '#b2b5be' : '#808080';
+
+      // 1) A→B→C 虚线 (实测: 虚 8px / 实 8px, 1px 宽)
+      ctx.setLineDash([8, 8]);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = dashC;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineTo(cc.x, cc.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // 2) 级别线 + 标签
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = lineC;
+      ctx.font = '12px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'right';
+      const step = it.b.p - it.a.p;                 // A→B 的 1 个单位
+      for (const lv of (it.levels || this.FIBEXT)) {
+        const price = it.c.p + step * lv;
+        const yy = this.yOf(price);
+        if (yy == null) continue;
+        ctx.beginPath(); ctx.moveTo(bx, yy); ctx.lineTo(cc.x, yy); ctx.stroke();
+        const txt = `${lv} (${this._fmtPrice(price)})`;
+        const tw = ctx.measureText(txt).width;
+        ctx.fillStyle = lineC;
+        let tx = bx - 5.5;                          // 实测: 标签右端距 x(B) 约 7 CSS px
+        if (tx - tw < 2) tx = tw + 2;               // 左边实在放不下就贴左边缘
+        ctx.fillText(txt, tx, yy);
+      }
+
+      // 3) 三个空心圆锚点 (蓝环 + 白芯)
+      const knob = (kx, ky) => {
+        if (kx == null || ky == null) return;
+        ctx.beginPath(); ctx.arc(kx, ky, 4.75, 0, Math.PI * 2);
+        ctx.fillStyle = dark ? '#131722' : '#fff'; ctx.fill();
+        ctx.strokeStyle = this.COLOR; ctx.lineWidth = 1; ctx.stroke();
+      };
+      knob(ax, ay); knob(bx, by); knob(cc.x, cc.y);
+
+      ctx.strokeStyle = it.color || this.COLOR;
+      ctx.fillStyle = it.color || this.COLOR;
+      if (selected) this.handles(ctx, [[ax, ay], [bx, by], [cc.x, cc.y]]);
     } else if (it.type === 'text') {
       if (ax == null || ay == null) { ctx.restore(); return; }
       ctx.font = '13px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';

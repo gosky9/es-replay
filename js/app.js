@@ -280,33 +280,31 @@ const App = {
     const bar = document.getElementById('drawBar');
     const grip = bar && bar.querySelector('.db-grip');
     if (!bar || !grip) return;
+    // 平移量用 transform 表达: 收藏条本身绝对定位在右上角, 不再随图例文字宽度变化而挪动
+    let dx = 0, dy = 0;
+    const apply = () => { bar.style.transform = `translate(${dx}px, ${dy}px)`; };
     try {
       const p = JSON.parse(localStorage.getItem('es_replay_drawbar') || 'null');
-      if (p && typeof p.left === 'number') {
-        bar.style.left = p.left + 'px';
-        bar.style.top = p.top + 'px';
-      }
+      if (p && typeof p.dx === 'number') { dx = p.dx; dy = p.dy || 0; apply(); }
     } catch (e) { /* 本地记录损坏时忽略 */ }
 
     grip.addEventListener('mousedown', e => {
       if (e.button !== 0) return;
       e.preventDefault(); e.stopPropagation();
-      const l0 = parseFloat(bar.style.left) || 0;
-      const t0 = parseFloat(bar.style.top) || 0;
+      const dx0 = dx, dy0 = dy;
       const sx = e.clientX, sy = e.clientY;
       bar.classList.add('dragging');
       const move = ev => {
-        bar.style.left = Math.round(l0 + ev.clientX - sx) + 'px';
-        bar.style.top = Math.round(t0 + ev.clientY - sy) + 'px';
+        dx = Math.round(dx0 + ev.clientX - sx);
+        dy = Math.round(dy0 + ev.clientY - sy);
+        apply();
       };
       const up = () => {
         document.removeEventListener('mousemove', move);
         document.removeEventListener('mouseup', up);
         bar.classList.remove('dragging');
         try {
-          localStorage.setItem('es_replay_drawbar', JSON.stringify({
-            left: parseFloat(bar.style.left) || 0, top: parseFloat(bar.style.top) || 0,
-          }));
+          localStorage.setItem('es_replay_drawbar', JSON.stringify({ dx, dy }));
         } catch (err) { /* 隐私模式下忽略 */ }
       };
       document.addEventListener('mousemove', move);
@@ -349,7 +347,7 @@ const App = {
   },
 
   /* ---------- 工具栏分发 (左侧工具栏 + 顶部收藏条共用) ---------- */
-  DRAW_TOOLS: ['cursor', 'trend', 'hline', 'rect', 'fib', 'text', 'measure'],
+  DRAW_TOOLS: ['cursor', 'trend', 'hline', 'rect', 'fib', 'fibext', 'text', 'measure'],
   /** 截图里有、但本工具还没实现的工具 —— 点击只提示, 不做任何事 */
   TODO_TOOLS: {
     hmlines: '多水平线', gannfan: '江恩扇形', gannbox: '江恩箱', brush: '画笔',
@@ -357,7 +355,7 @@ const App = {
   },
   TOOL_NAME: {
     cursor: '光标', trend: '趋势线', hline: '水平线', rect: '矩形',
-    fib: '斐波那契', text: '文字', measure: '尺子',
+    fib: '斐波那契', fibext: '斐波那契扩展', text: '文字', measure: '尺子',
   },
 
   /** 明确告知"该功能还没做", 不伪造行为; 提示贴在所点的按钮旁边 */
@@ -371,7 +369,9 @@ const App = {
       if (tool !== 'cursor' && !this.engine) { this.toast('请先开始复盘再使用绘图工具', true); return; }
       Draw.setTool(tool);
       if (tool !== 'cursor') {
-        this.toast(`${this.TOOL_NAME[tool]}: 点第一点 → 移动 → 点第二点 (Esc 取消) · 画完自动回到光标`);
+        this.toast(tool === 'fibext'
+          ? `${this.TOOL_NAME[tool]}: 点 A → 点 B → 点 C (三个点) · 画完自动回到光标`
+          : `${this.TOOL_NAME[tool]}: 点第一点 → 移动 → 点第二点 (Esc 取消) · 画完自动回到光标`);
       }
       this.syncToolUI();
       return;
