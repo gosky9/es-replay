@@ -104,7 +104,13 @@ const waitLoaded = page => page.waitForFunction(
     const proto = CanvasRenderingContext2D.prototype;
     const orig = proto.fillText;
     proto.fillText = function (t, x, y) {
-      if (/^\d+$/.test(t) && +t > 0 && +t <= 400) calls.push(+t);   // 排除坐标轴年份等纯数字刻度
+      // 只收 Bar Count: 它固定用橙色画 (#ff9800 浅色 / #ffab40 深色)。
+      // 不能只按「纯数字」判定 —— 时间轴的日刻度现在不带「日」字了(2026-10-22 用户要求),
+      // 裸数字会被一起收进来, 里面混着奇数日期, 断言就假失败。
+      const cs = String(this.fillStyle || '');
+      const isBc = /^#ff(9800|ab40)$/i.test(cs)
+                || cs === 'rgb(255, 152, 0)' || cs === 'rgb(255, 171, 64)';
+      if (isBc && /^\d+$/.test(t) && +t > 0) calls.push(+t);
       return orig.call(this, t, x, y);
     };
     ChartMgr.refreshBarCount();
@@ -549,6 +555,85 @@ const waitLoaded = page => page.waitForFunction(
   }));
   check('尺子测量创建', m1 === 1, '第一次测量 ' + m1 + ' 个');
   check('尺子只保留最新一个', m2.measures === 1 && m2.total === 2, JSON.stringify(m2));
+
+  /* 画一半鼠标滑出画布: 不许自动取消, 线条停在边界, 移回来继续 (用户 2026-10-22 要求)
+     原来 mouseleave 里直接 cancel(), 手一抖滑出去整条就废了。 */
+  {
+    const cbox = await page.locator('#drawLayer').boundingBox();
+    const dSt = () => page.evaluate(() => ({
+      draft: !!Draw.draft, tool: Draw.tool,
+      bx: Draw.draft ? +Draw.xOf(Draw.draft.b.t).toFixed(1) : null,
+      W: +Draw.W.toFixed(1),
+    }));
+    await page.click('#drawBar button[data-tool="measure"]');
+    await page.mouse.click(cbox.x + 420, cbox.y + 250);
+    await page.waitForTimeout(120);
+    const d0 = await dSt();
+    // 甩到画布右侧外面 (画布右边界之外)
+    const outX = Math.min(cbox.x + cbox.width + 200, 1590);
+    await page.mouse.move(outX, cbox.y + 140, { steps: 8 });
+    await page.waitForTimeout(140);
+    const d1 = await dSt();
+    check('画一半鼠标滑出画布不取消, 线条停在右边界',
+      d0.draft && d1.draft && d1.tool === 'measure' && Math.abs(d1.bx - d1.W) < 4,
+      JSON.stringify(d1));
+    // 移回来: 第二点重新跟手
+    await page.mouse.move(cbox.x + 620, cbox.y + 330, { steps: 10 });
+    await page.waitForTimeout(140);
+    const d2 = await dSt();
+    check('鼠标移回画布后继续跟随', d2.draft && Math.abs(d2.bx - 620) < 8, JSON.stringify(d2));
+    // 从上方边界滑出也要保持绘制中
+    await page.mouse.move(cbox.x + 620, Math.max(cbox.y - 60, 2), { steps: 6 });
+    await page.waitForTimeout(140);
+    const d3 = await dSt();
+    check('鼠标从上方滑出画布也不取消', d3.draft, JSON.stringify(d3));
+    // 回来点第二下, 仍能正常完成
+    await page.mouse.move(cbox.x + 620, cbox.y + 330, { steps: 6 });
+    await page.waitForTimeout(80);
+    await page.mouse.click(cbox.x + 620, cbox.y + 330);
+    await page.waitForTimeout(150);
+    const d4 = await page.evaluate(() => ({
+      draft: !!Draw.draft, tool: Draw.tool,
+      measures: Draw.items.filter(i => i.type === 'measure').length, total: Draw.count(),
+    }));
+    check('滑出过画布的一次绘制仍能正常完成',
+      !d4.draft && d4.tool === 'cursor' && d4.measures === 1 && d4.total === 2, JSON.stringify(d4));
+  }
+
+  /* 拖动既有图元时滑出画布松开: 必须清掉 _drag, 否则回来动鼠标会"隔空拖图" */
+  {
+    const cbox = await page.locator('#drawLayer').boundingBox();
+    const n0 = await page.evaluate(() => Draw.count());
+    await page.click('#drawBar button[data-tool="hline"]');
+    await page.mouse.click(cbox.x + 400, cbox.y + 300);
+    await page.waitForTimeout(150);
+    await page.click('#sideToolbar button[data-tool="cursor"]');
+    await page.mouse.move(cbox.x + 400, cbox.y + 300);
+    await page.mouse.down();
+    await page.waitForTimeout(80);
+    const dragging = await page.evaluate(() => !!Draw._drag);
+    await page.mouse.move(Math.min(cbox.x + cbox.width + 200, 1590), cbox.y + 260, { steps: 10 });
+    await page.waitForTimeout(120);
+    await page.mouse.up();
+    await page.waitForTimeout(150);
+    const g1 = await page.evaluate(() => {
+      const it = Draw.items.filter(i => i.type === 'hline').pop();
+      return { drag: !!Draw._drag, p: it ? it.a.p : null };
+    });
+    await page.mouse.move(cbox.x + 300, cbox.y + 500, { steps: 8 });
+    await page.waitForTimeout(130);
+    const g2 = await page.evaluate(() => Draw.items.filter(i => i.type === 'hline').pop().a.p);
+    check('拖图元时在画布外松开不会粘住鼠标',
+      dragging && !g1.drag && g1.p === g2,
+      `拖拽中=${dragging} 松开后drag=${g1.drag} 松开价=${g1.p && g1.p.toFixed(2)} 再移动=${g2.toFixed(2)}`);
+    // 清掉这条临时线, 后面用例仍按原来的图元数量断言
+    await page.evaluate(() => {
+      const it = Draw.items.filter(i => i.type === 'hline').pop();
+      if (it) Draw.removeById(it.id);
+    });
+    await page.waitForTimeout(80);
+    check('临时水平线已清理(不影响后续计数)', (await page.evaluate(() => Draw.count())) === n0, `${n0}`);
+  }
 
   // 水平线 (单击完成) + 隐藏/显示
   await page.click('#drawBar button[data-tool="hline"]');
@@ -1009,6 +1094,10 @@ const waitLoaded = page => page.waitForFunction(
     return out;
   });
   check('日线时间轴刻度不出现 NaN', axisFmt.every(s => !/NaN/.test(s)), axisFmt.join(' | '));
+  // 用户 2026-10-22: 最下面那条时间轴的「xx日」不要那个「日」字
+  check('时间轴日刻度不带「日」字 (只出数字)', axisFmt.every(s => !/日/.test(s)), axisFmt.join(' | '));
+  check('图例品种名只写 ES', (await page.textContent('.lg-name')).trim().startsWith('ES ·'),
+        await page.textContent('.lg-name'));
   await page.click('#tfGroup button[data-tf="5m"]');
   await waitLoaded(page);
   await page.waitForTimeout(400);

@@ -45,9 +45,14 @@ const Draw = {
 
     // capture 阶段: 绘图工具激活时拦截; 光标模式仅在命中图元时拦截
     area.addEventListener('mousedown', e => this.onDown(e), true);
-    area.addEventListener('mousemove', e => this.onMove(e), true);
-    area.addEventListener('mouseup', e => this.onUp(e), true);
-    area.addEventListener('mouseleave', e => { if (this.draft || this._drag) this.cancel(); });
+    // mousemove / mouseup 挂在 document 上, 而不是 #chartArea:
+    //   原来 mouseleave 里直接 cancel() —— 画一半鼠标一滑出画布就整条作废。
+    //   用户 2026-10-22 要求「不要自动取消, 假装鼠标停在边上, 回来继续画」, 所以改成:
+    //   越界时把坐标夹到画布边界(onMove 里 _clamp), 移回来接着画;
+    //   在画布外松手也能正常收尾, 不会留下"粘住"的拖拽状态。
+    // 没有绘制/拖拽时 onMove/onUp 立刻返回, 不影响十字光标、图表平移和页面其它交互。
+    document.addEventListener('mousemove', e => this.onMove(e), true);
+    document.addEventListener('mouseup', e => this.onUp(e), true);
 
     this.resize();
     new ResizeObserver(() => this.resize()).observe(area);
@@ -350,6 +355,17 @@ const Draw = {
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   },
 
+  /** 把画布外坐标夹回画布边界 (0..W, 0..H)。
+      画图/拖拽时鼠标滑出画布, 坐标会变成负数或超过宽高 —— 夹住它,
+      效果就是线条停在边界上不动("假装鼠标还在那个边界点"), 鼠标移回来自然接上。 */
+  _clampPos({ x, y }) {
+    const W = this.W || 0, H = this.H || 0;
+    return {
+      x: x < 0 ? 0 : (x > W ? W : x),
+      y: y < 0 ? 0 : (y > H ? H : y),
+    };
+  },
+
   onDown(e) {
     if (!App.engine || this.hidden) return;
     // 中键: 点中哪个绘图就直接删掉, 不必先左键选中再按 Delete
@@ -511,8 +527,10 @@ const Draw = {
   },
 
   onMove(e) {
+    // 监听挂在 document 上, 页面里每次移动都会进来 —— 没有绘制/拖拽就直接走开
+    if (!this.draft && !this._drag && !this._dragOrder) return;
     if (!App.engine || this.hidden) return;
-    const { x, y } = this._pos(e);
+    const { x, y } = this._clampPos(this._pos(e));
 
     if (this.draft) {
       e.stopPropagation();

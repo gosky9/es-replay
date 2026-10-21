@@ -170,21 +170,22 @@ const ChartMgr = {
         fixLeftEdge: false, lockVisibleTimeRangeOnResize: true,
         tickMarkFormatter: (time, type) => {
           // 日/3日/周/月线的 time 是 "YYYY-MM-DD" 字符串, 直接 *1000 会得到 NaN
+          // 日刻度只出数字, 不带「日」字 (用户 2026-10-22 要求: 屏幕最下面那条时间轴 xx日 → xx)
           if (typeof time === 'string') {
             const s = time.split('-').map(Number);
             if (type === 0) return String(s[0]);
             if (type === 1) return `${s[1]}月`;
-            return `${s[2]}日`;
+            return String(s[2]);
           }
           if (time && typeof time === 'object') {                   // BusinessDay 形式
             if (type === 0) return String(time.year);
             if (type === 1) return `${time.month}月`;
-            return `${time.day}日`;
+            return String(time.day);
           }
           const d = new Date(time * 1000), p = n => String(n).padStart(2, '0');
           if (type === 0) return String(d.getUTCFullYear());        // 年
           if (type === 1) return `${d.getUTCMonth() + 1}月`;          // 月
-          if (type === 2) return `${d.getUTCDate()}日`;              // 日
+          if (type === 2) return String(d.getUTCDate());             // 日 (不带「日」字)
           return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;     // 时:分(ET)
         },
       },
