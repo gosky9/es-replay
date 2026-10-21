@@ -12,6 +12,7 @@ _z_*.png
 _smoke*.js
 _smoke*.py
 _cmp*.py
+_crop*.py
 _api.js
 
 # 工具链
