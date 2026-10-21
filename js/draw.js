@@ -1088,8 +1088,8 @@ const Draw = {
       ctx.fillStyle = it.color || this.COLOR;
       if (selected) this.handles(ctx, [[ax, ay], [bx, by]]);
     } else if (it.type === 'fibext') {
-      // 照 reference/18 截图:
-      //   浅灰虚线 A→B→C + 三个蓝色空心圆锚点
+      // 照 reference/18 + 20 截图:
+      //   浅灰虚线 A→B→C (只在画的过程中带三个锚点圈)
       //   每个级别一条灰实线, 横向从 x(B) 拉到 x(C), 标签右对齐贴在线左端外侧
       const cc = this._px(it.c);
       if (ax == null || ay == null || bx == null || by == null || !cc) { ctx.restore(); return; }
@@ -1126,14 +1126,18 @@ const Draw = {
         ctx.fillText(txt, tx, yy);
       }
 
-      // 3) 三个空心圆锚点 (蓝环 + 白芯)
-      const knob = (kx, ky) => {
-        if (kx == null || ky == null) return;
-        ctx.beginPath(); ctx.arc(kx, ky, 4.75, 0, Math.PI * 2);
-        ctx.fillStyle = dark ? '#131722' : '#fff'; ctx.fill();
-        ctx.strokeStyle = this.COLOR; ctx.lineWidth = 1; ctx.stroke();
-      };
-      knob(ax, ay); knob(bx, by); knob(cc.x, cc.y);
+      // 3) 三个空心圆锚点 (蓝环 + 白芯) —— 只在画的过程中给落点反馈;
+      //    画完就收掉 (照 reference/20: 画好的扩展只有虚线和级别横线, 没有圈),
+      //    要挪点靠选中后的方形手柄
+      if (isDraft) {
+        const knob = (kx, ky) => {
+          if (kx == null || ky == null) return;
+          ctx.beginPath(); ctx.arc(kx, ky, 4.75, 0, Math.PI * 2);
+          ctx.fillStyle = dark ? '#131722' : '#fff'; ctx.fill();
+          ctx.strokeStyle = this.COLOR; ctx.lineWidth = 1; ctx.stroke();
+        };
+        knob(ax, ay); knob(bx, by); knob(cc.x, cc.y);
+      }
 
       ctx.strokeStyle = it.color || this.COLOR;
       ctx.fillStyle = it.color || this.COLOR;

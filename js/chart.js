@@ -22,6 +22,9 @@ const BarCountPrimitive = {
   refresh() { if (this._req) this._req(); },
 };
 
+/** Bar Count 数字顶端与 K 线最低点的垂直间距 (CSS px), 实测 reference/20 = 48.8 device / 2 */
+const BARCOUNT_GAP = 24.4;
+
 function drawBarCounts(target) {
   if (typeof Draw !== 'undefined' && !Draw.showBarCount) return;
   const bars = ChartMgr._lastData;
@@ -50,10 +53,15 @@ function drawBarCounts(target) {
     const H = scope.bitmapSize.height / vpr;          // 画布高度(CSS px)
     ctx.save();
     ctx.scale(hrp, vpr);                             // 之后按 CSS px 画
-    ctx.font = '500 10px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+    // 照 reference/20 逐像素标定: 数字墨迹高 15 device px (=7.5 CSS), 字干 2 device px
+    //   → 常规字重(400) 11px; 数字中心与 K 线中心对齐
+    ctx.font = '400 11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
     ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillStyle = dark ? '#ffab40' : '#ff9800';     // TV 的 Bar Count 是橙色
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = dark ? '#ffab40' : '#ff9800';     // TV 的 Bar Count 是橙色 rgb(255,152,0)
+    // 数字顶端距 K 线最低点固定 24.4 CSS px (10 根样本 48~50 device px, 与蜡烛形状无关)。
+    // 用字形真实高度把"顶端"换算成 baseline, 免得不同字体基线位置不一样
+    const capH = ctx.measureText('0').actualBoundingBoxAscent || 7.5;
     for (let i = i0; i <= i1; i++) {
       const b = bars[i];
       const n = b && b.dayNo;
@@ -63,7 +71,7 @@ function drawBarCounts(target) {
       if (y == null || y < 0 || y > H - 12) continue;
       const x = ts.logicalToCoordinate(i);
       if (x == null) continue;
-      ctx.fillText(String(n), x, y + 4);             // 不再描边: TV 就是纯色字, 少一遍文字绘制
+      ctx.fillText(String(n), x, y + BARCOUNT_GAP + capH);  // 不再描边: TV 就是纯色字
     }
     ctx.restore();
   });

@@ -120,6 +120,53 @@ const waitLoaded = page => page.waitForFunction(
   check('Bar Count 每 2 根显示(只出现偶数)', bcInfo.calls.length > 3 && bcInfo.allEven,
         JSON.stringify(bcInfo.calls.slice(0, 10)));
 
+  /* Bar Count 几何: 照 reference/20 逐像素实测 calibrate
+     —— 数字墨迹高 15 device px(=11px 常规字重), 顶端距 K 线低点固定 24.4 CSS px, 水平居中于 K 线 */
+  const bcGeo = await page.evaluate(async () => {
+    const bars = ChartMgr._lastData, ts = ChartMgr.chart.timeScale();
+    const lr = ts.getVisibleLogicalRange();
+    const cands = [];
+    for (let i = Math.max(0, Math.ceil(lr.from) + 1); i < Math.min(bars.length, lr.to - 1); i++) {
+      const b = bars[i];
+      if (!b.dayNo || b.dayNo % 2 || b.dayNo > 400) continue;
+      const x = ts.logicalToCoordinate(i), y = ChartMgr.candle.priceToCoordinate(b.l);
+      if (x != null && y != null && x > 20 && y > 40) cands.push({ n: b.dayNo, x, y });
+    }
+    const proto = CanvasRenderingContext2D.prototype, orig = proto.fillText, got = [];
+    proto.fillText = function (t, x, y) {
+      if (/^\d+$/.test(String(t))) got.push({ t: +t, x, y, font: this.font, fill: String(this.fillStyle) });
+      return orig.apply(this, arguments);
+    };
+    ChartMgr.refreshBarCount();
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    proto.fillText = orig;
+
+    const orange = got.filter(g => g.fill === '#ff9800' || g.fill === '#ffab40');
+    const c2 = document.createElement('canvas').getContext('2d');
+    const rows = [];
+    for (const g of orange) {
+      const m = cands.find(c => c.n === g.t && Math.abs(c.x - g.x) < 1.5);
+      if (!m) continue;
+      c2.font = g.font;                                   // 用同一字体量出数字墨迹高
+      const capH = c2.measureText('0').actualBoundingBoxAscent;
+      // canvas 读回 font 时会把默认字重 400 省掉, 所以没有权重前缀就等于 400
+      const wm = /^(\d+)\s/.exec(g.font);
+      rows.push({ n: g.t, gap: +(g.y - capH - m.y).toFixed(2), dx: +(g.x - m.x).toFixed(2),
+                  font: g.font, weight: wm ? wm[1] : '400' });
+    }
+    return { rows, n: orange.length };
+  });
+  const bcR0 = bcGeo.rows[0];
+  check('Bar Count 字号 = 11px 常规字重 (实测墨迹高 15 device px, 字干 2 device px)',
+        !!bcR0 && /(^|\s)11px/.test(bcR0.font) && bcR0.weight === '400',
+        bcR0 ? bcR0.font : '没抓到数字绘制');
+  check('Bar Count 数字顶端距 K 线低点 24.4px (reference/20 实测 48.8 device px)',
+        bcGeo.rows.length > 2 && bcGeo.rows.every(r => Math.abs(r.gap - 24.4) < 0.8),
+        JSON.stringify(bcGeo.rows.map(r => r.gap)));
+  check('Bar Count 数字水平居中于 K 线',
+        bcGeo.rows.length > 2 && bcGeo.rows.every(r => Math.abs(r.dx) < 0.6),
+        JSON.stringify(bcGeo.rows.map(r => r.dx)));
+
   /* 时间戳 = ET 墙钟编码(假UTC), 与浏览器时区无关 */
   const tzOk = await page.evaluate(() => {
     const b = App.bars[0];
@@ -398,8 +445,8 @@ const waitLoaded = page => page.waitForFunction(
   });
   check('左侧工具栏图标盒 28 (viewBox 56 单位 => 1 单位 0.5px)', toolGeo.svg === 28, String(toolGeo.svg));
 
-  // 图标不是手画的: 24 个由 trace_icons.py 从 reference/17 的墨迹描出(实心轮廓 + evenodd),
-  // 斐波那契扩展是纯几何图形, 按 reference/18 的像素坐标直接描成描边矢量(圆 + 直线), 不用描轮廓
+  // 图标不是手画的: 23 个由 trace_icons.py 从 reference/17 的墨迹描出(实心轮廓 + evenodd),
+  // 斐波那契回撤(4 横线 + 2 圆环, 见 reference/19) 和斐波那契扩展按像素坐标描成描边矢量
   const traced = await page.evaluate(() => {
     const side = [...document.querySelectorAll('#sideToolbar .tool')]
       .filter(b => b.dataset.tool !== 'brush')
@@ -410,9 +457,33 @@ const waitLoaded = page => page.waitForFunction(
     const stroked = all.filter(s => s.getAttribute('stroke') === 'currentColor').length;
     return { n: all.length, viewOk, filled, stroked };
   });
-  check('25 个图标都按原图像素标定(viewBox 56: 24 描轮廓 + 扩展描边)',
-    traced.viewOk && traced.n === 25 && traced.filled === 24 && traced.stroked === 1,
+  check('25 个图标都按原图像素标定(viewBox 56: 23 描轮廓 + 2 描边)',
+    traced.viewOk && traced.n === 25 && traced.filled === 23 && traced.stroked === 2,
     `${traced.n} 个 viewBox ok=${traced.viewOk} 描轮廓${traced.filled} 描边${traced.stroked}`);
+
+  /* 斐波那契回撤图标: reference/19 里 tooltip "Fib retracement" 箭头 x=465 正对的那个 ——
+     4 条等距横线 + 2 个空心圆环, 不是菱形。坐标全部从截图量出来(1 device px = 1 viewBox 单位) */
+  const fibGlyph = await page.evaluate(() => {
+    const s = document.querySelector('#drawBar .dbtn[data-tool="fib"] svg');
+    if (!s) return null;
+    const lines = [...s.querySelectorAll('path')].map(p => {
+      const m = /^M([\d.]+) ([\d.]+)h([\d.]+)$/.exec(p.getAttribute('d') || '');
+      return m ? { x: +m[1], y: +m[2], len: +m[3] } : null;
+    });
+    const circles = [...s.querySelectorAll('circle')].map(c =>
+      ({ cx: +c.getAttribute('cx'), cy: +c.getAttribute('cy'), r: +c.getAttribute('r') }));
+    return { lines, circles, sw: s.getAttribute('stroke-width') };
+  });
+  const fy = fibGlyph ? fibGlyph.lines.map(l => l && l.y) : [];
+  check('斐波那契图标 = 4 条横线 + 2 个空心圆环 (reference/19 的 Fib retracement)',
+    !!fibGlyph && fibGlyph.lines.length === 4 && fibGlyph.lines.every(Boolean)
+    && fibGlyph.circles.length === 2 && fibGlyph.sw === '2',
+    fibGlyph ? `${fibGlyph.lines.length} 线 ${fibGlyph.circles.length} 环 sw=${fibGlyph.sw}` : '没有 fib 图标');
+  check('斐波那契图标 4 条横线等距(10.5) 且两端圆环落在第 2/第 4 条线上',
+    fy.length === 4 && Math.abs(fy[1] - fy[0] - 10.5) < 0.01 && Math.abs(fy[2] - fy[1] - 10.5) < 0.01
+    && Math.abs(fy[3] - fy[2] - 10.5) < 0.01
+    && !!fibGlyph && fibGlyph.circles.every(c => Math.abs(c.cy - (c.cx > 28 ? fy[1] : fy[3])) < 0.01),
+    fibGlyph ? `y=${JSON.stringify(fy)} 环=${JSON.stringify(fibGlyph.circles)}` : 'none');
 
   const box = await page.locator('#chartMain').boundingBox();
   const P = (dx, dy) => ({ x: box.x + dx, y: box.y + dy });
@@ -980,6 +1051,44 @@ const waitLoaded = page => page.waitForFunction(
   check('扩展级别价差 = A→B 的 1 个单位 (pC + k*(pB-pA))',
         !!ext && ext.stepsEqual && Math.abs(ext.step - ext.ab) < 1e-9,
         ext ? `step=${ext.step.toFixed(4)} AB=${ext.ab.toFixed(4)}` : 'none');
+
+  /* 画完不留锚点圈 (照 reference/20: 画好的扩展只有虚线 + 级别横线; reference/18 是画到一半才带圈)
+     用 arc() 调用次数当判据, 比读像素稳: 不受坐标轴/网格干扰 */
+  const arcProbe = await page.evaluate(() => {
+    const proto = CanvasRenderingContext2D.prototype, origArc = proto.arc;
+    const countArcs = () => {
+      let n = 0;
+      proto.arc = function (...a) { n++; return origArc.apply(this, a); };
+      try { Draw.render(); } finally { proto.arc = origArc; }
+      return n;
+    };
+    const keepItems = Draw.items, keepSel = Draw.selected, keepDraft = Draw.draft;
+    const keepPos = (typeof Trading !== 'undefined') ? Trading.pos : undefined;
+    if (typeof Trading !== 'undefined') Trading.pos = 0;      // 排除 TP/SL 圆环干扰
+    const bars = ChartMgr._lastData;
+    const b0 = bars[bars.length - 30], b1 = bars[bars.length - 20], b2 = bars[bars.length - 10];
+    const geo = [
+      { t: b0.t, p: b0.l }, { t: b1.t, p: b1.h }, { t: b2.t, p: b2.l },
+    ];
+    Draw.items = []; Draw.selected = null; Draw.draft = null;
+    Draw.addItem({ type: 'fibext', a: geo[0], b: geo[1], c: geo[2], levels: Draw.FIBEXT.slice() });
+    const done = countArcs();
+    Draw.draft = { type: 'fibext', a: geo[0], b: geo[1], c: geo[2], stage: 2 };
+    const draft = countArcs();
+    Draw.draft = null;
+    Draw.items = [];
+    Draw.addItem({ type: 'fib', a: geo[0], b: geo[1], levels: Draw.FIB.slice() });
+    const fibDone = countArcs();
+    Draw.items = keepItems; Draw.selected = keepSel; Draw.draft = keepDraft;
+    if (typeof Trading !== 'undefined') Trading.pos = keepPos;
+    Draw.render();
+    return { done, draft, fibDone };
+  });
+  check('斐波那契扩展画完不画锚点圈 (只有虚线 + 级别横线), 画的过程中有 3 个圈',
+        arcProbe.done === 0 && arcProbe.draft === 3,
+        `画完=${arcProbe.done} 进行中=${arcProbe.draft}`);
+  check('斐波那契回撤画完仍保留 2 个锚点圈 (reference/06), 没被误伤',
+        arcProbe.fibDone === 2, String(arcProbe.fibDone));
 
   // 三个锚点都能单独拖动
   const extDrag = await page.evaluate(() => {
