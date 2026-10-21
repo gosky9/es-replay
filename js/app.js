@@ -234,6 +234,8 @@ const App = {
       if (k === ' ') { e.preventDefault(); this.engine.toggle(); }
       else if (e.key === 'ArrowRight') this.engine.step(1);
       else if (e.key === 'ArrowLeft') this.engine.step(-1);
+      else if (e.key === 'ArrowUp') { e.preventDefault(); this.stopOrderAtBarEdge('buy'); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); this.stopOrderAtBarEdge('sell'); }
       else if (k === 'r') { this.engine.restart(); ChartMgr.setData(this.visibleBars(), { fit: 'recent' }); }
       else if (k === 'b') this.placeOrder('buy');
       else if (k === 's') this.placeOrder('sell');
@@ -824,6 +826,20 @@ const App = {
       Trading._pendingLimits = true;
       this.toast(`限价${side === 'buy' ? '买入' : '卖出'} ${qty} 手 @ ${lp.toFixed(2)} 已挂单, 等待成交`);
     }
+  },
+
+  /* 上/下键: 在当前这根 K 线的上/下沿外一个 tick 挂突破单
+     上键 → 最高价 + 1 tick 上破买入 (止损买单); 下键 → 最低价 − 1 tick 下破卖出 (止损卖单) */
+  stopOrderAtBarEdge(side) {
+    if (!this.engine) { this.toast('请先开始复盘', true); return; }
+    const cur = this.engine.current;
+    const tick = Trading.TICK || 0.25;
+    const qty = Math.max(1, +document.getElementById('orderQty').value || 1);
+    const px = side === 'buy' ? cur.h + tick : cur.l - tick;
+    const price = Math.round(px * 100) / 100;                 // 去掉浮点毛刺, 保持 0.25 对齐
+    Trading.placeStop(side, qty, price);
+    Draw.render();
+    this.toast(`${side === 'buy' ? '上破' : '下破'} ${price.toFixed(2)} 挂突破${side === 'buy' ? '买' : '卖'} ${qty} 手 · 拖动该线可改价`);
   },
 
   addMarker(side, price) {

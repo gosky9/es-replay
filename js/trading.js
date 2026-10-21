@@ -1,6 +1,7 @@
 /* ============ trading.js — 模拟交易 (含价格行为学的突破单/止盈止损) ============ */
 const Trading = {
   MULT: 50,                // ES 1手 = $50/点
+  TICK: 0.25,              // ES 最小跳动
   trades: [],              // {time, side, price, qty, type, pnl}
   pos: 0,                  // 净持仓 (+多 / -空)
   avg: 0,                  // 持仓均价

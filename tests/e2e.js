@@ -688,6 +688,76 @@ const waitLoaded = page => page.waitForFunction(
   check('拖动止盈止损线调整', slAfter !== slBefore && Math.abs(slAfter - slBefore) > 0.5,
         slBefore + ' → ' + slAfter);
 
+  /* 拖右侧价格轴上下: 交易线要跟着实时走, 不能只在松手后跳一下。
+     判据: 鼠标还按着(mouseup 之前)绘图层就已经重绘过多次, 而且 TP/SL 的屏幕 y 同步位移
+     (两者位移量必须一样 = 整块平移), 而价格本身不能被改动。 */
+  const areaBox = await page.locator('#chartArea').boundingBox();
+  const freeY = await page.evaluate(() => {
+    const ys = Draw.orderLines().map(o => Draw.yOf(o.price)).filter(v => v != null && isFinite(v));
+    let best = 200, bestD = -1;
+    for (let y = 110; y < Draw._priceAreaHeight() - 70; y += 8) {
+      const d = ys.length ? Math.min(...ys.map(v => Math.abs(v - y))) : 999;
+      if (d > bestD) { bestD = d; best = y; }
+    }
+    return { y: best, d: Math.round(bestD) };
+  });
+  const axisPos = { x: areaBox.x + areaBox.width - 22, y: areaBox.y + freeY.y };  // 价格轴上、避开交易线的高度
+  const follow0 = await page.evaluate(() => {
+    Draw._rc = 0;
+    if (!Draw._wrapped) {
+      const orig = Draw.render.bind(Draw);
+      Draw.render = function () { Draw._rc++; return orig(); };
+      Draw._wrapped = true;
+    }
+    return { tp: Draw.yOf(Trading.tp), sl: Draw.yOf(Trading.sl), tpP: Trading.tp, slP: Trading.sl };
+  });
+  await page.mouse.move(axisPos.x, axisPos.y);
+  await page.mouse.down();
+  await page.mouse.move(axisPos.x, axisPos.y + 70, { steps: 10 });
+  await page.waitForTimeout(80);
+  const followMid = await page.evaluate(() => ({
+    rc: Draw._rc, tp: Draw.yOf(Trading.tp), sl: Draw.yOf(Trading.sl), tpP: Trading.tp, slP: Trading.sl,
+  }));
+  await page.mouse.up();
+  await page.waitForTimeout(120);
+  const dTP = followMid.tp - follow0.tp, dSL = followMid.sl - follow0.sl;
+  check('按住价格轴上下拖时交易线实时跟随(松手前就已重绘, 屏幕 y 跟着变)',
+        freeY.d > 20 && followMid.rc >= 3 && Math.abs(dTP) + Math.abs(dSL) > 2
+        && followMid.tpP === follow0.tpP && followMid.slP === follow0.slP,
+        `重绘 ${followMid.rc} 次 · 空档 ${freeY.d}px · TP Δ${dTP.toFixed(1)} SL Δ${dSL.toFixed(1)}`);
+  // 注: 拖价格轴在 lightweight-charts 里是"纵向缩放"而不是平移, 所以 TP/SL 的位移量不一定相等
+  // 把价格轴恢复成自动缩放, 免得影响后面的用例
+  await page.evaluate(() => ChartMgr.chart.priceScale('right').applyOptions({ autoScale: true }));
+
+  /* 上/下键: 在当前 K 线的 最高价+1tick / 最低价−1tick 挂突破单 */
+  const keyStop0 = await page.evaluate(() => {
+    if (App.engine.playing) App.engine.pause();
+    Trading.clearStops(); Draw.render();
+    const c = App.engine.current;
+    return { h: c.h, l: c.l, tick: Trading.TICK };
+  });
+  await page.keyboard.press('ArrowUp');
+  await page.waitForTimeout(140);
+  const upStop = await page.evaluate(() => ({
+    stops: Trading.stops.map(s => ({ side: s.side, price: s.price, qty: s.qty })),
+    lines: Draw.orderLines().map(o => o.kind),
+  }));
+  check('↑ 键在当前 K 最高价上方 1 tick 挂上破买单',
+        upStop.stops.length === 1 && upStop.stops[0].side === 'buy'
+        && Math.abs(upStop.stops[0].price - (keyStop0.h + keyStop0.tick)) < 1e-9
+        && upStop.lines.some(k => String(k).startsWith('stop')),
+        `H=${keyStop0.h} +${keyStop0.tick} → ` + JSON.stringify(upStop.stops));
+
+  await page.keyboard.press('ArrowDown');
+  await page.waitForTimeout(140);
+  const dnStop = await page.evaluate(() => Trading.stops.map(s => ({ side: s.side, price: s.price })));
+  const sellOne = dnStop.find(s => s.side === 'sell');
+  check('↓ 键在当前 K 最低价下方 1 tick 挂下破卖单',
+        dnStop.length === 2 && !!sellOne
+        && Math.abs(sellOne.price - (keyStop0.l - keyStop0.tick)) < 1e-9,
+        `L=${keyStop0.l} −${keyStop0.tick} → ` + JSON.stringify(dnStop));
+  await page.evaluate(() => { Trading.clearStops(); Draw.render(); });
+
   // 统计与交易记录 (要在下面清空之前判)
   check('交易记录已生成', (await page.evaluate(() => Trading.trades.length)) >= 1,
         await page.textContent('#stWin'));
@@ -1079,16 +1149,20 @@ const waitLoaded = page => page.waitForFunction(
     Draw.items = [];
     Draw.addItem({ type: 'fib', a: geo[0], b: geo[1], levels: Draw.FIB.slice() });
     const fibDone = countArcs();
+    Draw.draft = { type: 'fib', a: geo[0], b: geo[1] };
+    const fibDraft = countArcs();
+    Draw.draft = null;
     Draw.items = keepItems; Draw.selected = keepSel; Draw.draft = keepDraft;
     if (typeof Trading !== 'undefined') Trading.pos = keepPos;
     Draw.render();
-    return { done, draft, fibDone };
+    return { done, draft, fibDone, fibDraft };
   });
   check('斐波那契扩展画完不画锚点圈 (只有虚线 + 级别横线), 画的过程中有 3 个圈',
         arcProbe.done === 0 && arcProbe.draft === 3,
         `画完=${arcProbe.done} 进行中=${arcProbe.draft}`);
-  check('斐波那契回撤画完仍保留 2 个锚点圈 (reference/06), 没被误伤',
-        arcProbe.fibDone === 2, String(arcProbe.fibDone));
+  check('斐波那契回撤画完也不画锚点圈, 画的过程中有 2 个圈',
+        arcProbe.fibDone === 0 && arcProbe.fibDraft === 2,
+        `画完=${arcProbe.fibDone} 进行中=${arcProbe.fibDraft}`);
 
   // 三个锚点都能单独拖动
   const extDrag = await page.evaluate(() => {

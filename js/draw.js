@@ -46,10 +46,54 @@ const Draw = {
     window.addEventListener('scroll', dropRect, { passive: true, capture: true });
     // 视窗变化(缩放/平移)时重绘, 一帧最多画一次
     ChartMgr.chart.timeScale().subscribeVisibleLogicalRangeChange(() => this.paintSoon());
+    // 纵向(价格轴)变化: 库没有任何订阅回调, 要自己盯 —— 否则止盈/止损只在 mouseup 后跳一下
+    this.watchPriceScale();
     // 仅在拖拽/绘制中才每帧重绘, 避免鼠标移动时的无谓重绘
     ChartMgr.chart.subscribeCrosshairMove(() => {
       if (this.draft || this._drag) this.render();
     });
+  },
+
+  /* ---------- 价格轴(纵向)变化跟随 ----------
+     lightweight-charts 只对外发"可见逻辑范围"(横向)的变化; 在右侧价格轴上上下拖、
+     或在图上滚轮缩放价格, 都不会触发任何回调 → 我们的绘图层(入场/止盈/止损/画好的图元)
+     只在 mouseup 后才重绘一次, 看起来就是"止盈止损不跟着动, 松手才到位"。
+     这里每帧取两个固定价格在屏幕上的 y 当指纹, 变了就补一帧;
+     为了不白烧 CPU, 只在按下 / 滚轮之后的窗口期内跑。 */
+  watchPriceScale() {
+    const area = document.getElementById('chartArea');
+    if (!area || this._watchBound) return;
+    this._watchBound = true;
+    let raf = 0, stopAt = 0, last = '';
+
+    const fingerprint = () => {
+      const s = ChartMgr.candle;
+      if (!s) return '';
+      const a = s.priceToCoordinate(0), b = s.priceToCoordinate(100);
+      return (a == null || b == null) ? '' : a.toFixed(3) + ',' + b.toFixed(3);   // 缩放会改斜率, 平移会改截距, 两个采样都看
+    };
+    const tick = () => {
+      raf = 0;
+      const sig = fingerprint();
+      if (sig && sig !== last) {
+        last = sig;
+        this.render();                     // yOf/pOf 每次都现算, 所以直接重绘就是跟随
+      }
+      if (performance.now() < stopAt) raf = requestAnimationFrame(tick);
+    };
+    const kick = ms => {                        // 延长跟随窗口
+      stopAt = Math.max(stopAt, performance.now() + ms);
+      if (!raf) raf = requestAnimationFrame(tick);
+    };
+    const settle = () => {                      // 松手: 立刻缩短窗口, 再补几帧收尾
+      stopAt = performance.now() + 250;
+      if (!raf) raf = requestAnimationFrame(tick);
+    };
+
+    area.addEventListener('mousedown', () => kick(15000), true);       // 按住期间一直跟
+    window.addEventListener('mouseup', settle, true);
+    area.addEventListener('wheel', () => kick(320), { passive: true, capture: true });
+    area.addEventListener('dblclick', () => kick(400), true);
   },
 
   resize() {
@@ -317,6 +361,10 @@ const Draw = {
     // 只处理主图区域(避开成交量 pane 与时间轴)
     const yMax = this._priceAreaHeight();
     if (y > yMax) return;
+    // 右侧价格轴上的手势一律让给图表库 (平移/缩放)。否则"线和鼠标同高时点价格轴"会被
+    // 当成拖那条线 —— 交易线的命中判定只看 y, 不看 x
+    const axW = (typeof ChartMgr !== 'undefined' && ChartMgr._axisW) ? ChartMgr._axisW() : 0;
+    if (x > this.W - axW) return;
 
     const t = this.timeAtX(x);                     // 右侧空白区也能落点
     if (t == null) return;
@@ -1046,7 +1094,7 @@ const Draw = {
       ctx.fillStyle = it.color || this.COLOR;
       if (selected) this.handles(ctx, [[ax, ay], [bx, by]]);
     } else if (it.type === 'fib') {
-      // 照 reference/06 截图: 无填充; 深灰水平线 + 左侧 `级别 (价格)` 灰字 + 两端空心圆手柄
+      // 照 reference/06 截图: 无填充; 深灰水平线 + 左侧 `级别 (价格)` 灰字 + 两端空心圆手柄(仅绘制中)
       if (ax == null || ay == null || bx == null || by == null) { ctx.restore(); return; }
       const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx);
       const pA = it.a.p, pB = it.b.p;                 // A 锚点=1 级, B 锚点=0 级
@@ -1076,14 +1124,17 @@ const Draw = {
           ctx.fillText(txt, 6, y);
         }
       }
-      // 两个圆形手柄 (空心圆: 蓝环白芯)
-      const knob = (cx, cy) => {
-        if (cx == null || cy == null) return;
-        ctx.beginPath(); ctx.arc(cx, cy, 8, 0, Math.PI * 2);
-        ctx.fillStyle = dark ? '#131722' : '#fff'; ctx.fill();
-        ctx.strokeStyle = this.COLOR; ctx.lineWidth = 1.6; ctx.stroke();
-      };
-      knob(ax, ay); knob(bx, by);
+      // 两个圆形手柄 (空心圆: 蓝环白芯) —— 和扩展一样只在画的过程中给落点反馈;
+      //    画完不画圈 (用户 2026-10-22: "斐波纳契现在画完之后还有圆圈"), 挪点靠选中后的方形手柄
+      if (isDraft) {
+        const knob = (cx, cy) => {
+          if (cx == null || cy == null) return;
+          ctx.beginPath(); ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+          ctx.fillStyle = dark ? '#131722' : '#fff'; ctx.fill();
+          ctx.strokeStyle = this.COLOR; ctx.lineWidth = 1.6; ctx.stroke();
+        };
+        knob(ax, ay); knob(bx, by);
+      }
       ctx.strokeStyle = it.color || this.COLOR;
       ctx.fillStyle = it.color || this.COLOR;
       if (selected) this.handles(ctx, [[ax, ay], [bx, by]]);
