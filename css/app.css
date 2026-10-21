@@ -147,7 +147,9 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
 }
 /* 图标统一 TradingView 手感: 1.5px 线宽 + 圆头圆角 */
 #sideToolbar svg, #drawBar svg { stroke-linecap: round; stroke-linejoin: round; }
-.tool svg { width: 20px; height: 20px; }
+/* 图标墨迹约 19px, 对齐 reference/17 里 TV 左侧工具栏实测的 17.5~24.5 CSS px */
+.tool svg { width: 26px; height: 26px; }
+#sideToolbar svg g[stroke-width] { stroke-width: 1.3; }
 .tool:hover { background: var(--bg-hover); color: var(--text); }
 .tool.active { color: var(--accent); background: var(--bg-hover); }
 .tool-sep { width: 24px; height: 1px; background: var(--border); margin: 5px 0; }
@@ -546,27 +548,28 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
 #topOverlay #legend { position: static; }
 
 /* 收藏白条: 圆角悬浮, 不再是通栏; 可按住左侧六点拖动到任意位置 */
+/* 尺寸按 reference/17 实测折算: 截图是 2x, 条实体高 33.5 / 图标槽距 34 / 图标墨迹 19.5~23 CSS px */
 #drawBar {
   position: relative; left: 0; top: 0;
-  display: flex; align-items: center; gap: 1px; flex: none;
-  height: 26px; padding: 0 5px 0 2px;
+  display: flex; align-items: center; gap: 2px; flex: none;
+  height: 34px; padding: 0 6px 0 4px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 13px;
+  border-radius: 17px;
   box-shadow: 0 1px 4px rgba(19,23,34,.10);
   overflow: hidden;
 }
 #drawBar.dragging { box-shadow: 0 4px 14px rgba(19,23,34,.20); cursor: grabbing; }
 .db-grip {
-  width: 12px; height: 20px; display: inline-flex; align-items: center;
+  width: 16px; height: 26px; display: inline-flex; align-items: center;
   justify-content: center; color: var(--border-strong); cursor: grab; flex: none;
 }
 #drawBar.dragging .db-grip { cursor: grabbing; }
-.db-grip svg { width: 8px; height: 14px; }
-.dbtn { width: 24px; height: 22px; border-radius: 4px; }
-.dbtn svg { width: 17px; height: 17px; }
+.db-grip svg { width: 11px; height: 20px; }
+.dbtn { width: 32px; height: 30px; border-radius: 4px; }
+.dbtn svg { width: 28px; height: 28px; }
 .dbtn.active { background: var(--bg-hover); color: var(--accent); }
-.dsep { height: 14px; margin: 0 3px; }
+.dsep { height: 20px; margin: 0 3px; }
 
 /* ---------- 回放条: 贴时间轴上方的白色方块 ---------- */
 #replayBar {

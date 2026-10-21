@@ -15,6 +15,8 @@ _smoke*.py
 _cmp*.py
 _crop*.py
 _api.js
+_m[0-9]*.py
+_m[0-9]*.js
 
 # 工具链
 __pycache__/

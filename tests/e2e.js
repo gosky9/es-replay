@@ -318,6 +318,27 @@ const waitLoaded = page => page.waitForFunction(
   const dbarN = await page.evaluate(() => document.querySelectorAll('#drawBar button[data-tool]').length);
   check('收藏横条按钮数(趋势线/水平线/矩形/斐波那契/文字/尺子/磁吸/隐藏/清空)', dbarN === 9, String(dbarN) + ' 个');
 
+  // 尺寸对齐 reference/17: TV 截图是 2x, 折半后 条实体高 33.5 / 槽距 34 / 图标墨迹 19.5~23
+  const dbarGeo = await page.evaluate(() => {
+    const bar = document.getElementById('drawBar').getBoundingClientRect();
+    const btns = [...document.querySelectorAll('#drawBar .dbtn')].map(b => b.getBoundingClientRect());
+    const svg = document.querySelector('#drawBar .dbtn svg').getBoundingClientRect();
+    return {
+      h: Math.round(bar.height),
+      pitch: btns.length > 1 ? Math.round(btns[1].x - btns[0].x) : 0,
+      svg: Math.round(svg.width),
+    };
+  });
+  check('收藏条尺寸对齐 TV(高 34 / 槽距 34 / 图标盒 28)',
+    dbarGeo.h === 34 && dbarGeo.pitch === 34 && dbarGeo.svg === 28,
+    `高${dbarGeo.h} 槽距${dbarGeo.pitch} 图标${dbarGeo.svg}`);
+
+  const toolGeo = await page.evaluate(() => {
+    const svg = document.querySelector('#sideToolbar .tool svg').getBoundingClientRect();
+    return { svg: Math.round(svg.width) };
+  });
+  check('左侧工具栏图标盒 26 (墨迹约 19, 对齐 TV 17.5~24.5)', toolGeo.svg === 26, String(toolGeo.svg));
+
   const box = await page.locator('#chartMain').boundingBox();
   const P = (dx, dy) => ({ x: box.x + dx, y: box.y + dy });
   // TradingView 式两点绘制: 点第一点 → 移动 → 点第二点
