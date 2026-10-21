@@ -337,7 +337,20 @@ const waitLoaded = page => page.waitForFunction(
     const svg = document.querySelector('#sideToolbar .tool svg').getBoundingClientRect();
     return { svg: Math.round(svg.width) };
   });
-  check('左侧工具栏图标盒 26 (墨迹约 19, 对齐 TV 17.5~24.5)', toolGeo.svg === 26, String(toolGeo.svg));
+  check('左侧工具栏图标盒 28 (viewBox 56 单位 => 1 单位 0.5px)', toolGeo.svg === 28, String(toolGeo.svg));
+
+  // 图标不是手画的: 由 trace_icons.py 从 reference/17 的墨迹描出, 实心轮廓 + evenodd
+  const traced = await page.evaluate(() => {
+    const side = [...document.querySelectorAll('#sideToolbar .tool')]
+      .filter(b => b.dataset.tool !== 'brush')
+      .map(b => b.querySelector('svg'));
+    const all = [...document.querySelectorAll('#drawBar .dbtn svg'), ...side];
+    const ok = all.every(s => s && s.getAttribute('viewBox') === '0 0 56 56'
+      && s.querySelector('path[fill-rule="evenodd"]'));
+    return { n: all.length, ok };
+  });
+  check('24 个图标都是按原图描出的轮廓(viewBox 56 / evenodd)', traced.ok && traced.n === 24,
+    `${traced.n} 个 ok=${traced.ok}`);
 
   const box = await page.locator('#chartMain').boundingBox();
   const P = (dx, dy) => ({ x: box.x + dx, y: box.y + dy });

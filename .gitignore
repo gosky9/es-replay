@@ -17,6 +17,9 @@ _crop*.py
 _api.js
 _m[0-9]*.py
 _m[0-9]*.js
+_g[0-9]*.py
+_g[0-9]*.js
+_icons_tv*.json
 
 # 工具链
 __pycache__/
