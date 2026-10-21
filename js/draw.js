@@ -818,7 +818,7 @@ const Draw = {
     }
     const chipRight = plotR - 34;
 
-    // 4) 入场行: [买入/卖出 pill] [TP 圆] [SL 圆] [牌子]
+    // 4) 入场行: [做多/做空 pill] [TP 圆] [SL 圆] [牌子]
     if (pos !== 0 && yEntry != null) {
       const dir = pos > 0 ? '#2962ff' : '#f23645';
       const entry = list.find(o => o.key === 'entry');
@@ -839,7 +839,7 @@ const Draw = {
       ctx.save();
       // pill
       ctx.font = '600 12px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
-      const pillTxt = pos > 0 ? '买入' : '卖出';
+      const pillTxt = pos > 0 ? '做多' : '做空';
       const pillW = ctx.measureText(pillTxt).width + 32, pillH = 26;
       this.roundRect(ctx, pillR - pillW, yEntry - pillH / 2, pillW, pillH, 5);
       ctx.fillStyle = dir; ctx.fill();

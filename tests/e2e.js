@@ -60,6 +60,19 @@ const waitLoaded = page => page.waitForFunction(
         && defaults.mtf === '5m' && defaults.mses === 'rth'
         && defaults.activeTf === '5m' && defaults.activeSes === 'rth', JSON.stringify(defaults));
 
+  /* 刚进来: K 线靠左 2/3, 右侧 1/3 留白 (不再贴死右边缘) */
+  const blankPct = () => page.evaluate(() => {
+    const ts = ChartMgr.chart.timeScale();
+    const last = ChartMgr._lastData[ChartMgr._lastData.length - 1];
+    const x = ts.timeToCoordinate(last.t);
+    const plotR = Draw.W - Draw._axisWidth() - 8;
+    return x == null ? null : ((plotR - x) / plotR) * 100;
+  });
+  const blankInit = await blankPct();
+  check('刚进来右侧留白约 1/3',
+        blankInit != null && blankInit > 28 && blankInit < 38,
+        '空白 ' + (blankInit == null ? '—' : blankInit.toFixed(1)) + '%');
+
   /* 黑白盘面: 白涨(空心) / 黑跌(实心) */
   const bw = await page.evaluate(() => {
     const o = ChartMgr.candle.options();
@@ -186,6 +199,12 @@ const waitLoaded = page => page.waitForFunction(
   const bc4 = await page.textContent('#barCount');
   const tfOk = await page.evaluate(() => App.tf === '15m' && App.engine.total > 0);
   check('周期切换 15m', tfOk && /\/ \d+$/.test(bc4), bc4 + ' | 图例周期 ' + await page.textContent('#lgTf'));
+
+  /* 8.5 换周期后 K 线停在左侧 2/3, 右侧 1/3 留白 */
+  const blankAfterTf = await blankPct();
+  check('换周期后右侧留白约 1/3',
+        blankAfterTf != null && blankAfterTf > 28 && blankAfterTf < 38,
+        '空白 ' + (blankAfterTf == null ? '—' : blankAfterTf.toFixed(1)) + '%');
 
   /* 9. 时段切换 ETH → RTH */
   await page.click('#sessionSeg button[data-session="eth"]');

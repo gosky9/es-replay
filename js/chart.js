@@ -186,22 +186,27 @@ const ChartMgr = {
   setEmaEnabled(on) { this.emaEnabled = on; if (!on) this.ema.setData([]); },
 
   /* ---------- 视窗控制 (TradingView 行为: 不打断用户缩放/拖动) ---------- */
-  /** 显示最近 n 根, 右侧留白 (新图初始状态) */
+  /** 右侧留白比例: 空白占整幅宽度的 1/3, 即空白 = 有 K 线部分的一半 */
+  RIGHT_BLANK: 0.5,
+
+  /** 显示最近 n 根, 靠左 2/3, 右侧 1/3 留空 (新图初始状态 / 换一段 / 重置) */
   fitRecent(n = 180) {
     const total = this._lastData ? this._lastData.length : 0;
     if (!total) return;
-    this.chart.timeScale().setVisibleLogicalRange({
-      from: Math.max(0, total - n) - 0.5, to: total + 5,
-    });
+    const shown = Math.min(n, total);
+    const from = Math.max(0, total - shown) - 0.5;
+    const to = from + shown * (1 + this.RIGHT_BLANK);   // 有 K 线部分 : 空白 = 2 : 1
+    this.chart.timeScale().setVisibleLogicalRange({ from, to });
   },
 
-  /** 以某根为中心显示 (切周期/时段时锚定原时间位置, 不像 fitContent 那样跳走) */
+  /** 以某根为锚点显示 (切周期/时段时锚定原时间位置, 不像 fitContent 那样跳走)
+   *  锚点落在横向 2/3 处, 右侧 1/3 留空 */
   fitAround(idx, n = 140) {
     if (!this._lastData || !this._lastData.length) return;
     const total = this._lastData.length;
     const i = Math.min(Math.max(0, idx), total - 1);
-    const from = Math.max(0, i - n * 0.8);
-    const to = Math.min(total + 5, i + n * 0.2 + 4);
+    const from = i - n * (2 / 3);
+    const to = from + n;
     this.chart.timeScale().setVisibleLogicalRange({ from, to });
   },
 
