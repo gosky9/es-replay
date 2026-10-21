@@ -352,10 +352,13 @@ const waitLoaded = page => page.waitForFunction(
 
   /* 12. 限价单 */
   await page.click('#typeSeg button[data-type="limit"]');
+  // 必须先停播: 算完 lp 到点"买入"之间若行情自己走掉几根,
+  // 那根最低价的 K 线可能已经播过去了, 限价单就永远不成交(这条原来是偶发 FAIL 的根因)
+  await page.evaluate(() => App.engine.pause());
   // 挂单价取"未来 6 根的最低价"向上取整到 0.25 tick —— 保证一定会被回踩成交(不靠运气)
   const lp = await page.evaluate(() => {
     const i = App.engine.idx;
-    const fwd = App.bars.slice(i + 1, i + 7);
+    const fwd = App.engine.bars.slice(i + 1, i + 7);
     if (!fwd.length) return 0;
     const lo = Math.min(...fwd.map(b => b.l));
     return Math.ceil(lo * 4) / 4;
@@ -371,7 +374,11 @@ const waitLoaded = page => page.waitForFunction(
     await page.waitForTimeout(70);
   }
   const limitFilled = await page.evaluate(() => App._limits.length === 0 && Trading.pos !== 0);
-  check('限价成交', limitFilled, '持仓=' + await page.textContent('#stPos'));
+  const limDbg = await page.evaluate(() => ({
+    lim: App._limits.length, pos: Trading.pos, pend: Trading._pendingLimits,
+    stops: Trading.stops.length, tp: Trading.tp, sl: Trading.sl, idx: App.engine.idx,
+  }));
+  check('限价成交', limitFilled, '持仓=' + await page.textContent('#stPos') + ' ' + JSON.stringify(limDbg));
   if (limitFilled) await page.click('#btnClose');
   await page.click('#typeSeg button[data-type="market"]');
 
@@ -392,7 +399,7 @@ const waitLoaded = page => page.waitForFunction(
 
   check('收藏工具横条可见', await page.isVisible('#drawBar'));
   const dbarN = await page.evaluate(() => document.querySelectorAll('#drawBar button[data-tool]').length);
-  check('收藏横条按钮数(尺子/趋势线/斐波那契/扩展/水平线/矩形/文字/磁吸/隐藏/清空)', dbarN === 10, String(dbarN) + ' 个');
+  check('收藏横条按钮数(尺子/趋势线/斐波那契/扩展/上箭头/下箭头/水平线/矩形/文字/磁吸/隐藏/清空)', dbarN === 12, String(dbarN) + ' 个');
 
   // 尺寸对齐 reference/17: TV 截图是 2x, 折半后 条实体高 33.5 / 槽距 34 / 图标墨迹 19.5~23
   const dbarGeo = await page.evaluate(() => {
@@ -412,8 +419,8 @@ const waitLoaded = page => page.waitForFunction(
   // 收藏条顺序: 尺子 / 趋势线 / 斐波那契 / 斐波那契扩展 打头
   const dbarOrder = await page.evaluate(() =>
     [...document.querySelectorAll('#drawBar .dbtn')].map(b => b.dataset.tool));
-  check('收藏栏顺序: 尺子/趋势线/斐波那契/扩展 前四个',
-    JSON.stringify(dbarOrder.slice(0, 4)) === JSON.stringify(['measure', 'trend', 'fib', 'fibext']),
+  check('收藏栏顺序: 尺子/趋势线/斐波那契/扩展/上箭头/下箭头 前六个',
+    JSON.stringify(dbarOrder.slice(0, 6)) === JSON.stringify(['measure', 'trend', 'fib', 'fibext', 'arrowup', 'arrowdown']),
     dbarOrder.join(','));
 
   // 收藏条是方角 + 有投影 (照 reference/18: 圆角 6px, 无描边)
@@ -457,8 +464,8 @@ const waitLoaded = page => page.waitForFunction(
     const stroked = all.filter(s => s.getAttribute('stroke') === 'currentColor').length;
     return { n: all.length, viewOk, filled, stroked };
   });
-  check('25 个图标都按原图像素标定(viewBox 56: 23 描轮廓 + 2 描边)',
-    traced.viewOk && traced.n === 25 && traced.filled === 23 && traced.stroked === 2,
+  check('27 个图标都按原图像素标定(viewBox 56: 23 描轮廓 + 4 描边)',
+    traced.viewOk && traced.n === 27 && traced.filled === 23 && traced.stroked === 4,
     `${traced.n} 个 viewBox ok=${traced.viewOk} 描轮廓${traced.filled} 描边${traced.stroked}`);
 
   /* 斐波那契回撤图标: reference/19 里 tooltip "Fib retracement" 箭头 x=465 正对的那个 ——
@@ -748,6 +755,21 @@ const waitLoaded = page => page.waitForFunction(
         && upStop.lines.some(k => String(k).startsWith('stop')),
         `H=${keyStop0.h} +${keyStop0.tick} → ` + JSON.stringify(upStop.stops));
 
+  // 覆盖式: 再按两次 ↑, 同方向只应剩最新一张 (不堆叠)
+  await page.keyboard.press('ArrowUp');
+  await page.waitForTimeout(90);
+  await page.keyboard.press('ArrowUp');
+  await page.waitForTimeout(140);
+  const upStop2 = await page.evaluate(() => ({
+    n: Trading.stops.length,
+    buys: Trading.stops.filter(s => s.side === 'buy').map(s => s.price),
+    h: App.engine.current.h,
+  }));
+  check('连按 ↑ 是覆盖式: 同方向只保留最新一张 (不堆叠)',
+        upStop2.n === 1 && upStop2.buys.length === 1
+        && Math.abs(upStop2.buys[0] - (upStop2.h + keyStop0.tick)) < 1e-9,
+        `${upStop2.n} 张 · buy=${JSON.stringify(upStop2.buys)} H=${upStop2.h}`);
+
   await page.keyboard.press('ArrowDown');
   await page.waitForTimeout(140);
   const dnStop = await page.evaluate(() => Trading.stops.map(s => ({ side: s.side, price: s.price })));
@@ -757,6 +779,104 @@ const waitLoaded = page => page.waitForFunction(
         && Math.abs(sellOne.price - (keyStop0.l - keyStop0.tick)) < 1e-9,
         `L=${keyStop0.l} −${keyStop0.tick} → ` + JSON.stringify(dnStop));
   await page.evaluate(() => { Trading.clearStops(); Draw.render(); });
+
+  /* 成交大箭头 (照用户截图: 买=K 线下方青绿朝上 / 卖=K 线上方红色朝下), 直接读绘图层像素 */
+  const markPix = await page.evaluate(async () => {
+    if (App.engine.playing) App.engine.pause();
+    // 造一对买卖标记, 保证两个形态都在
+    const cur = App.engine.current;
+    Trading.fill('buy', 1, cur.c, 'market', cur.epoch, cur.off);
+    App.addMarker('buy', cur.c);
+    Trading.fill('sell', 1, cur.c, 'market', cur.epoch, cur.off);
+    App.addMarker('sell', cur.c);
+    App.renderTrading();
+    // 前面用例把视窗拖来拖去, 先对准最新一段, 否则标记可能落在画布外。
+    // 改完可见范围要等库重排一帧, 否则 xOf() 拿到的还是老坐标, 读到的是上一帧的画布
+    const i = App.engine.idx;
+    ChartMgr.chart.timeScale().setVisibleLogicalRange({ from: i - 60, to: i + 8 });
+    const raf = () => new Promise(r => requestAnimationFrame(r));
+    await raf(); await raf();
+    Draw.render();
+
+    const c = document.getElementById('drawLayer');
+    const k = c.width / parseFloat(c.style.width || c.width);
+    const ctx = c.getContext('2d');
+    const hit = (cx, cy, col) => {
+      const x = Math.round(cx * k), y = Math.round(cy * k);
+      const n = Math.max(6, Math.round(8 * k));
+      if (x - n < 0 || y - n < 0 || x + n > c.width || y + n > c.height) return -1;   // 画布外
+      const d = ctx.getImageData(x - n, y - n, n * 2, n * 2).data;
+      let c0 = 0;
+      for (let i2 = 0; i2 < d.length; i2 += 4) {
+        if (Math.abs(d[i2] - col[0]) < 12 && Math.abs(d[i2 + 1] - col[1]) < 12 && Math.abs(d[i2 + 2] - col[2]) < 12) c0++;
+      }
+      return c0;
+    };
+    const out = [];
+    const seen = new Set();
+    for (const m of ChartMgr.markers) {
+      const b = ChartMgr.barByTime(m.time);
+      if (!b) continue;
+      const buy = m.shape === 'arrowUp';
+      const col = buy ? [112, 204, 189] : [204, 47, 60];
+      const ye = Draw.yOf(buy ? b.l : b.h);
+      const cy = buy ? ye + Draw.MARK_GAP + Draw.MARK.h / 2 : ye - Draw.MARK_GAP - Draw.MARK.h / 2;
+      const x = Draw.xOf(b.t);
+      const key = (buy ? 'b' : 's') + m.time;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const n = hit(x, cy, col);
+      // 量包围盒: 大箭头 33×38, 库自带的小三角只有 ~10px, 用尺寸把两者分开
+      const bx = Math.round(x * k), by = Math.round(cy * k), pad = Math.round(Draw.MARK.w * k);
+      let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+      if (bx - pad >= 0 && by - pad >= 0 && bx + pad < c.width && by + pad < c.height) {
+        const S = pad * 2, d = ctx.getImageData(bx - pad, by - pad, S, S).data;
+        for (let yy = 0; yy < S; yy++) for (let xx = 0; xx < S; xx++) {
+          const o = (yy * S + xx) * 4;
+          if (Math.abs(d[o] - col[0]) < 12 && Math.abs(d[o + 1] - col[1]) < 12 && Math.abs(d[o + 2] - col[2]) < 12) {
+            if (xx < x0) x0 = xx; if (xx > x1) x1 = xx;
+            if (yy < y0) y0 = yy; if (yy > y1) y1 = yy;
+          }
+        }
+      }
+      out.push({
+        buy, n,
+        w: x1 >= x0 ? Math.round((x1 - x0 + 1) / k) : 0,
+        h: y1 >= y0 ? Math.round((y1 - y0 + 1) / k) : 0,
+      });
+    }
+    return { marks: out, nMarks: ChartMgr.markers.length };
+  });
+  check('成交标记在绘图层画成大箭头 16.5×19 (买=#70ccbd 朝上 / 卖=#cc2f3c 朝下)',
+        markPix.nMarks >= 2 && markPix.marks.length >= 2
+        && markPix.marks.filter(m => m.buy).length >= 1 && markPix.marks.filter(m => !m.buy).length >= 1
+        && markPix.marks.every(m => m.n > 90 && Math.abs(m.w - 16.5) <= 2 && Math.abs(m.h - 19) <= 2),
+        JSON.stringify(markPix));
+
+  /* 上/下箭头也是绘图工具: 点一下落一个, 位置就是点下去的地方 */
+  await page.evaluate(() => { Draw.clearAll(); Draw.setTool('arrowup'); });
+  const dArea = await page.locator('#chartArea').boundingBox();
+  await page.mouse.click(dArea.x + 380, dArea.y + 300);
+  await page.waitForTimeout(200);
+  const arrowItem = await page.evaluate(() => {
+    const it = Draw.items.find(i => i.type === 'arrow');
+    if (!it) return null;
+    const px = Draw._px(it.a);
+    const c = document.getElementById('drawLayer');
+    const k = c.width / parseFloat(c.style.width || c.width);
+    const d = c.getContext('2d')
+      .getImageData(Math.round(px.x * k) - 3, Math.round((px.y + 12) * k) - 3, 7, 7).data;
+    let hit = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (Math.abs(d[i] - 112) < 14 && Math.abs(d[i + 1] - 204) < 14 && Math.abs(d[i + 2] - 189) < 14) hit++;
+    }
+    return { dir: it.dir, tool: Draw.tool, hit, n: Draw.items.length };
+  });
+  check('上箭头工具: 点一下落一个朝上的箭头, 放完自动回光标',
+        !!arrowItem && arrowItem.dir === 1 && arrowItem.tool === 'cursor'
+        && arrowItem.n === 1 && arrowItem.hit > 0,
+        JSON.stringify(arrowItem));
+  await page.evaluate(() => Draw.clearAll());
 
   // 统计与交易记录 (要在下面清空之前判)
   check('交易记录已生成', (await page.evaluate(() => Trading.trades.length)) >= 1,

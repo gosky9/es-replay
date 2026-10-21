@@ -349,7 +349,7 @@ const App = {
   },
 
   /* ---------- 工具栏分发 (左侧工具栏 + 顶部收藏条共用) ---------- */
-  DRAW_TOOLS: ['cursor', 'trend', 'hline', 'rect', 'fib', 'fibext', 'text', 'measure'],
+  DRAW_TOOLS: ['cursor', 'trend', 'hline', 'rect', 'fib', 'fibext', 'arrowup', 'arrowdown', 'text', 'measure'],
   /** 截图里有、但本工具还没实现的工具 —— 点击只提示, 不做任何事 */
   TODO_TOOLS: {
     hmlines: '多水平线', gannfan: '江恩扇形', gannbox: '江恩箱', brush: '画笔',
@@ -358,6 +358,7 @@ const App = {
   TOOL_NAME: {
     cursor: '光标', trend: '趋势线', hline: '水平线', rect: '矩形',
     fib: '斐波那契', fibext: '斐波那契扩展', text: '文字', measure: '尺子',
+    arrowup: '向上箭头', arrowdown: '向下箭头',
   },
 
   /** 明确告知"该功能还没做", 不伪造行为; 提示贴在所点的按钮旁边 */
@@ -371,9 +372,13 @@ const App = {
       if (tool !== 'cursor' && !this.engine) { this.toast('请先开始复盘再使用绘图工具', true); return; }
       Draw.setTool(tool);
       if (tool !== 'cursor') {
-        this.toast(tool === 'fibext'
-          ? `${this.TOOL_NAME[tool]}: 点 A → 点 B → 点 C (三个点) · 画完自动回到光标`
-          : `${this.TOOL_NAME[tool]}: 点第一点 → 移动 → 点第二点 (Esc 取消) · 画完自动回到光标`);
+        if (tool === 'fibext') {
+          this.toast(`${this.TOOL_NAME[tool]}: 点 A → 点 B → 点 C (三个点) · 画完自动回到光标`);
+        } else if (tool === 'arrowup' || tool === 'arrowdown') {
+          this.toast(`${this.TOOL_NAME[tool]}: 点一下落在光标处 (Esc 取消) · 放完自动回到光标`);
+        } else {
+          this.toast(`${this.TOOL_NAME[tool]}: 点第一点 → 移动 → 点第二点 (Esc 取消) · 画完自动回到光标`);
+        }
       }
       this.syncToolUI();
       return;
@@ -829,7 +834,8 @@ const App = {
   },
 
   /* 上/下键: 在当前这根 K 线的上/下沿外一个 tick 挂突破单
-     上键 → 最高价 + 1 tick 上破买入 (止损买单); 下键 → 最低价 − 1 tick 下破卖出 (止损卖单) */
+     上键 → 最高价 + 1 tick 上破买入 (止损买单); 下键 → 最低价 − 1 tick 下破卖出 (止损卖单)
+     覆盖式: 同一方向只保留最新这一张, 连按不会堆一叠 (多/空各一张可以共存, 当 bracket 用) */
   stopOrderAtBarEdge(side) {
     if (!this.engine) { this.toast('请先开始复盘', true); return; }
     const cur = this.engine.current;
@@ -837,9 +843,13 @@ const App = {
     const qty = Math.max(1, +document.getElementById('orderQty').value || 1);
     const px = side === 'buy' ? cur.h + tick : cur.l - tick;
     const price = Math.round(px * 100) / 100;                 // 去掉浮点毛刺, 保持 0.25 对齐
+    const before = Trading.stops.length;
+    Trading.stops = Trading.stops.filter(s => s.side !== side);   // 覆盖同方向旧单
+    const replaced = before - Trading.stops.length;
     Trading.placeStop(side, qty, price);
     Draw.render();
-    this.toast(`${side === 'buy' ? '上破' : '下破'} ${price.toFixed(2)} 挂突破${side === 'buy' ? '买' : '卖'} ${qty} 手 · 拖动该线可改价`);
+    this.toast(`${side === 'buy' ? '上破' : '下破'} ${price.toFixed(2)} 挂突破${side === 'buy' ? '买' : '卖'} ${qty} 手` +
+               (replaced ? ` (已替换旧的 ${replaced} 张)` : '') + ' · 拖动该线可改价');
   },
 
   addMarker(side, price) {
@@ -847,15 +857,16 @@ const App = {
     const isDay = (this.tf === '1d' || this.tf === '1w');
     const t = isDay ? etDateStr(cur.epoch, cur.off) : chartTime(cur.epoch, cur.off);
     const m = ChartMgr.markers.slice();
-    const c = ChartMgr.colors();
     m.push({
       time: t,
       position: side === 'buy' ? 'belowBar' : 'aboveBar',
-      color: side === 'buy' ? c.up : c.down,
+      color: side === 'buy' ? Draw.MARK_UP : Draw.MARK_DOWN,   // 只是记录, 实际颜色由 draw.js 定
       shape: side === 'buy' ? 'arrowUp' : 'arrowDown',
       text: side === 'buy' ? '买' : '卖',
+      price,
     });
     ChartMgr.setMarkers(m);   // setMarkers 内部按 time 升序排
+    Draw.render();            // 大箭头是我们自己画的, 要主动重绘一帧
   },
 
   checkLimits(bar) {

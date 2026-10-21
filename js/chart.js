@@ -442,7 +442,27 @@ const ChartMgr = {
       return ta < tb ? -1 : ta > tb ? 1 : 0;
     });
     this.markers = sorted;
-    this.markersPlugin.setMarkers(sorted);
+    // 成交标记不再交给库画它的小三角, 由 draw.js 自己画大箭头(见 drawTradeMarkers)
+    this.markersPlugin.setMarkers([]);
+  },
+
+  /** 按时间戳找 K 线 (成交标记要拿这根 K 线的高/低来定位); 二分, 数据几十万根也不慢 */
+  barByTime(t) {
+    const bars = this._lastData;
+    if (!bars || !bars.length || t == null) return null;
+    const key = bars[0].t;
+    // 日/周线的 marker.time 是 'yyyy-mm-dd' 字符串, 直接线性找(标记数量很少)
+    if (typeof t === 'string' || typeof key === 'string') {
+      for (let i = bars.length - 1; i >= 0; i--) if (bars[i].t === t) return bars[i];
+      return null;
+    }
+    let lo = 0, hi = bars.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (bars[mid].t === t) return bars[mid];
+      if (bars[mid].t < t) lo = mid + 1; else hi = mid - 1;
+    }
+    return null;
   },
 
   /** 保存图表截图 */

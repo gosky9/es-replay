@@ -21,6 +21,17 @@ const Draw = {
 
   COLOR: '#2962ff',
   BAR_IDX_COLOR: '#f7a600',
+  /** 成交标记的大箭头 (照用户 2026-10-22 截图逐像素实测: 包围盒 33×38, 杆 19 宽 × 18 高) */
+  /* 成交标记的大箭头 —— 照 reference/21 (1263×915) 逐像素实测:
+     包围盒 33×38 **device px**, 而那张图是 2x (同图 Bar Count 数字墨迹 15 device,
+     和 reference/20 标定时完全一致) ⇒ 实际 **16.5 × 19 CSS px**, 杆 9.5 宽 × 9 高。
+     一开始按 device px 当 CSS 用, 画出来整整大一倍, 这里改回来。 */
+  MARK: { w: 16.5, h: 19, stemW: 9.5, stemH: 9 },
+  MARK_UP: '#70ccbd',       // 买 (在 K 线下方, 箭头朝上) — 截图 rgb(112,204,189)
+  MARK_DOWN: '#cc2f3c',     // 卖 (在 K 线上方, 箭头朝下) — 截图 rgb(204,47,60)
+  // 尖端到 K 线高/低点: 截两个样本量到 21 device (红) / 6 device (绿), 差别较大,
+  // 取中间偏小 8 device = 4 CSS (太远了会飘, 太近了压到影线)
+  MARK_GAP: 4,
   /** 斐波那契级别 (照 reference/06 截图: 1 / 0 / -1 / -2, 价格 = pB + (pA-pB)*级别) */
   FIB: [1, 0, -1, -2],
   /** 斐波那契扩展级别 (照 reference/18 截图: 只画 0 / 1 / 2, 价格 = pC + k*(pB-pA)) */
@@ -419,6 +430,15 @@ const Draw = {
     if (this.tool === 'hline') { this.pushHistory(); this.addItem({ type: 'hline', a: { t, p }, b: { t, p } }); this.setTool('cursor'); return; }
     if (this.tool === 'vline') { this.pushHistory(); this.addItem({ type: 'vline', a: { t, p }, b: { t, p } }); this.setTool('cursor'); return; }
     if (this.tool === 'text') { this.startTextInput(x, y, t, p); return; }
+    // 上/下箭头: 一下就是在光标位置落一个箭头标记
+    if (this.tool === 'arrowup' || this.tool === 'arrowdown') {
+      this.pushHistory();
+      const up = this.tool === 'arrowup';
+      this.addItem({ type: 'arrow', dir: up ? 1 : -1, a: { t, p }, b: { t, p },
+                     color: up ? this.MARK_UP : this.MARK_DOWN });
+      this.setTool('cursor');
+      return;
+    }
 
     // 三点工具 (斐波那契扩展): 第 1 点 A → 第 2 点 B → 第 3 点 C
     if (this.tool === 'fibext') {
@@ -535,6 +555,7 @@ const Draw = {
 
       if (it.type === 'hline') { it.a.p = p; it.b.p = p; }
       else if (it.type === 'vline') { it.a.t = t; it.b.t = t; }
+      else if (it.type === 'arrow') { it.a = { t, p }; it.b = { t, p }; }
       else if (it.type === 'text') { it.a.t = t; it.a.p = p; }
       else if (it.type === 'fibext') {
         if (part === 'a') it.a = { t, p };
@@ -634,6 +655,13 @@ const Draw = {
         if (ax != null && Math.abs(x - ax) < TH) return { id: it.id, part: 'a' };
         continue;
       }
+      if (it.type === 'arrow') {
+        const hw = this.MARK.w / 2, hh = this.MARK.h / 2;
+        if (ax != null && ay != null && Math.abs(x - ax) <= hw && Math.abs(y - ay) <= hh) {
+          return { id: it.id, part: 'a' };
+        }
+        continue;
+      }
       if (it.type === 'text') {
         if (ax != null && ay != null &&
             x > ax - 6 && x < ax + 6 + (it.text || '').length * 7 && y > ay - 14 && y < ay + 6) {
@@ -699,13 +727,70 @@ const Draw = {
     if (!App.engine) return;
 
     // Bar Count 已改为挂在 series 上的图元(见 chart.js), 跟 K 线同帧绘制, 这里不再画
+    // 顺序: 先色带/交易线, 再成交大箭头 —— 反过来的话持仓色带(半透明)会把箭头染淡
+    //     (用户截图里箭头也是压在色带之上的饱和色)
     this.drawOrderLines(ctx);          // 交易线不受"隐藏绘图"影响
+    this.drawTradeMarkers(ctx);        // 成交大箭头 (K 线上方卖 / 下方买)
     if (this.hidden) return;
 
     for (const it of this.items.slice().sort((p, q) => (p.z || 0) - (q.z || 0))) {
       this.drawItem(ctx, it, it.id === this.selected);
     }
     if (this.draft) this.drawItem(ctx, this.draft, false, true);
+  },
+
+  /* ---------- 成交标记: 大箭头 ----------
+     照用户 2026-10-22 截图逐像素描出来: 杆 19×18 + 三角头 33×20, 总 33×38, 平头平尾无描边。
+     买 = K 线下方、箭头朝上、青绿 #70ccbd; 卖 = K 线上方、朝下、红 #cc2f3c。 */
+  arrowShape(ctx, cx, cy, dir) {
+    const { w, h, stemW, stemH } = this.MARK;
+    const half = w / 2, sh = stemW / 2;
+    const top = cy - h / 2, bot = cy + h / 2;
+    ctx.beginPath();
+    if (dir > 0) {                                  // 朝上: 尖在 top
+      const base = bot - stemH;                     // 头与杆的分界
+      ctx.moveTo(cx, top);
+      ctx.lineTo(cx + half, base);
+      ctx.lineTo(cx + sh, base);
+      ctx.lineTo(cx + sh, bot);
+      ctx.lineTo(cx - sh, bot);
+      ctx.lineTo(cx - sh, base);
+      ctx.lineTo(cx - half, base);
+    } else {                                        // 朝下: 尖在 bot
+      const base = top + stemH;
+      ctx.moveTo(cx, bot);
+      ctx.lineTo(cx + half, base);
+      ctx.lineTo(cx + sh, base);
+      ctx.lineTo(cx + sh, top);
+      ctx.lineTo(cx - sh, top);
+      ctx.lineTo(cx - sh, base);
+      ctx.lineTo(cx - half, base);
+    }
+    ctx.closePath();
+  },
+
+  drawTradeMarkers(ctx) {
+    const list = (typeof ChartMgr !== 'undefined' && ChartMgr.markers) || [];
+    if (!list.length || !ChartMgr.barByTime) return;
+    const axW = (ChartMgr._axisW && ChartMgr._axisW()) || 0;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, this.W - axW, this._priceAreaHeight());   // 别画到右侧价格轴/时间轴上
+    ctx.clip();
+    for (const m of list) {
+      const b = ChartMgr.barByTime(m.time);
+      if (!b) continue;
+      const buy = m.shape === 'arrowUp';
+      const yEdge = this.yOf(buy ? b.l : b.h);
+      const x = this.xOf(b.t);
+      if (yEdge == null || x == null) continue;
+      const half = this.MARK.h / 2;
+      const cy = buy ? yEdge + this.MARK_GAP + half : yEdge - this.MARK_GAP - half;
+      this.arrowShape(ctx, x, cy, buy ? 1 : -1);
+      ctx.fillStyle = buy ? this.MARK_UP : this.MARK_DOWN;
+      ctx.fill();
+    }
+    ctx.restore();
   },
 
   /* ---------- 交易线: 挂单 / 入场 / 止盈 / 止损 (均可拖动) ---------- */
@@ -1084,6 +1169,15 @@ const Draw = {
       label(`${dP >= 0 ? '+' : ''}${dP.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`,
             (ax + bx) / 2 + 8, (ay + by) / 2 - 12);
       if (selected) this.handles(ctx, [[ax, ay], [bx, by]]);
+    } else if (it.type === 'arrow') {
+      // 上/下箭头标记: 与成交标记同一个字形, 一下落一个
+      if (ax == null || ay == null) { ctx.restore(); return; }
+      const dir = it.dir || 1;
+      ctx.setLineDash([]);
+      this.arrowShape(ctx, ax, ay, dir);
+      ctx.fillStyle = it.color || (dir > 0 ? this.MARK_UP : this.MARK_DOWN);
+      ctx.fill();
+      if (selected) this.handles(ctx, [[ax, ay]]);
     } else if (it.type === 'rect') {
       if (ax == null || ay == null || bx == null || by == null) { ctx.restore(); return; }
       const x0 = Math.min(ax, bx), y0 = Math.min(ay, by);
