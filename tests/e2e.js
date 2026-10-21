@@ -250,7 +250,8 @@ const waitLoaded = page => page.waitForFunction(
   check('买入开仓', (await page.textContent('#stPos')).includes('多'),
         await page.textContent('#stPos') + ' 记录' + await page.textContent('#tradeCount'));
   check('成交标记', (await page.evaluate(() => ChartMgr.markers.length)) === 1);
-  check('浮动盈亏', /\$/.test(await page.textContent('#stFloat')), await page.textContent('#stFloat'));
+  check('浮动盈亏按点显示(不再是美元)', /点$/.test(await page.textContent('#stFloat'))
+        && !/\$/.test(await page.textContent('#stFloat')), await page.textContent('#stFloat'));
 
   /* 交易线上的牌子按"点"显示 (不是美元): 1 点 = $50, 所以点数 = 价格差 */
   const ptsChip = await page.evaluate(() => {
@@ -299,7 +300,12 @@ const waitLoaded = page => page.waitForFunction(
   await page.waitForTimeout(250);
   check('平仓归零', (await page.textContent('#stPos')) === '0 手', await page.textContent('#stPos'));
   const real = await page.textContent('#stReal');
-  check('已实现盈亏', /\$/.test(real) && real !== '-', real + ' / 合计 ' + await page.textContent('#stTotal'));
+  check('已实现盈亏按点显示(不再是美元)', /点$/.test(real) && !/\$/.test(real) && real !== '-',
+        real + ' / 合计 ' + await page.textContent('#stTotal'));
+  const trPnl = await page.evaluate(() =>
+    [...document.querySelectorAll('#tradeList .t-pnl')].map(e => e.textContent.trim()).filter(Boolean));
+  check('交易记录盈亏也按点显示', trPnl.length > 0 && trPnl.every(s => /点$/.test(s) && !/\$/.test(s)),
+        JSON.stringify(trPnl.slice(0, 4)));
   check('胜率统计', /笔/.test(await page.textContent('#stWin')), await page.textContent('#stWin'));
 
   /* 8. 周期切换 (顶栏快捷按钮) —— 默认已是 5m, 这里切到 15m 再验证 */
@@ -694,46 +700,69 @@ const waitLoaded = page => page.waitForFunction(
   await page.waitForTimeout(400);
 
   /* 15. 右键突破单 + 拖动交易线 + 止盈止损 */
-  // (a) 纯逻辑: 止盈/止损/跳空成交
+  // (a) 纯逻辑: 止损=前5根极值外1tick / 止盈=2R / 下一根就扫到2R→改挂入场K线另一侧
   const logic = await page.evaluate(() => {
-    const mk = (o, h, l, c) => ({ o, h, l, c, epoch: 0, off: 0, t: 0 });
+    const mk = (o, h, l, c, epoch) => ({ o, h, l, c, epoch: epoch || 0, off: 0, t: 0 });
     const R = {};
+    // 前 5 根: 最低 99, 最高 100.5 → 做多入场 100, 止损 99-0.25=98.75, 风险 1.25, 止盈 102.5
+    const prev = [mk(100, 100.5, 99.5, 100), mk(100, 100.5, 99, 100), mk(100, 100.5, 99.2, 100),
+                  mk(100, 100.5, 99.4, 100), mk(100, 100.5, 99.1, 100)];
+
     Trading.reset();
-    Trading.fill('buy', 1, 100, 'market', 0, 0);
+    // 入场那根是大 K 线 (h=103), 后面"改挂另一侧"要用到
+    Trading.fill('buy', 1, 100, 'market', 0, 0, { bar: mk(100, 103, 99.5, 102.5, 0), prev });
     R.longBracket = [Trading.tp, Trading.sl];
-    let ev = Trading.checkBar(mk(101, 113, 100, 112), 0, 0);
-    R.tp = [ev.map(e => e.kind).join(), Trading.pos, Trading.realized];
+    // 入场当根不判止盈止损 (哪怕这一根自己就穿过了 2R)
+    R.entrySkip = Trading.checkBar(mk(101, 120, 90, 119, 0), 0, 0).map(e => e.kind || e.type);
+    R.afterSkipPos = Trading.pos;
+    // 开仓后第一根就扫到 2R(102.5) → 改挂入场K线另一侧(103), 不平仓
+    const ev1 = Trading.checkBar(mk(101, 103, 100, 102.8, 60), 60, 0);
+    R.extend = { ev: ev1.map(e => e.type + ':' + (e.kind || '')), tp: Trading.tp, pos: Trading.pos };
+    // 再下一根摸到新止盈 103 → 正常平仓, (103-100)*50 = 150
+    const ev2 = Trading.checkBar(mk(102, 104, 101, 103.5, 120), 120, 0);
+    R.extendExit = { ev: ev2.map(e => e.kind || e.type), pos: Trading.pos, realized: Trading.realized };
 
+    // 止损: 前 5 根最低 99 → 98.75, 下一根跌到 97 触发, (98.75-100)*50 = -62.5
     Trading.reset();
-    Trading.fill('buy', 1, 100, 'market', 0, 0);
-    ev = Trading.checkBar(mk(100, 101, 93, 94), 0, 0);
-    R.sl = [ev.map(e => e.kind).join(), Trading.pos, Trading.realized];
+    Trading.fill('buy', 1, 100, 'market', 0, 0, { bar: mk(100, 100.5, 99.8, 100, 0), prev });
+    const ev3 = Trading.checkBar(mk(99, 99.5, 97, 97.5, 60), 60, 0);
+    R.slExit = { ev: ev3.map(e => e.kind || e.type), pos: Trading.pos, realized: Trading.realized };
 
+    // 空头: 前 5 根最高 100.5 → 止损 100.75, 风险 0.75, 止盈 98.5
     Trading.reset();
-    Trading.fill('sell', 1, 100, 'market', 0, 0);
+    Trading.fill('sell', 1, 100, 'market', 0, 0, { bar: mk(100, 100.5, 99.5, 100, 0), prev });
     R.shortBracket = [Trading.tp, Trading.sl];
-    ev = Trading.checkBar(mk(99, 100, 87, 88), 0, 0);
-    R.shortTp = [ev.map(e => e.kind).join(), Trading.pos, Trading.realized];
+    const ev4 = Trading.checkBar(mk(99, 100.4, 98.2, 98.6, 60), 60, 0);
+    R.shortTp = { ev: ev4.map(e => e.kind || e.type), pos: Trading.pos, realized: Trading.realized };
 
     Trading.reset();
     Trading.placeStop('buy', 1, 100);
-    ev = Trading.checkBar(mk(105, 108, 104, 106), 0, 0);   // 跳空高开按开盘价成交
-    R.gapFill = [ev.map(e => e.type).join(), Trading.pos, Trading.avg];
+    const ev5 = Trading.checkBar(mk(105, 108, 104, 106), 0, 0);   // 跳空高开按开盘价成交
+    R.gapFill = [ev5.map(e => e.type).join(), Trading.pos, Trading.avg];
 
     Trading.reset();
     Trading.placeStop('sell', 1, 100);
-    ev = Trading.checkBar(mk(105, 108, 101, 106), 0, 0);   // 未跌破不触发
-    R.notFilled = [ev.length, Trading.stops.length];
+    const ev6 = Trading.checkBar(mk(105, 108, 101, 106), 0, 0);   // 未跌破不触发
+    R.notFilled = [ev6.length, Trading.stops.length];
     Trading.reset();
     return R;
   });
-  check('开仓自动挂 12/6 点止盈止损',
-        logic.longBracket[0] === 112 && logic.longBracket[1] === 94
-        && logic.shortBracket[0] === 88 && logic.shortBracket[1] === 106,
-        '多 ' + JSON.stringify(logic.longBracket) + ' / 空 ' + JSON.stringify(logic.shortBracket));
-  check('止盈触发平仓 +12点', logic.tp[0] === 'tp' && logic.tp[1] === 0 && logic.tp[2] === 600, JSON.stringify(logic.tp));
-  check('止损触发平仓 -6点', logic.sl[0] === 'sl' && logic.sl[1] === 0 && logic.sl[2] === -300, JSON.stringify(logic.sl));
-  check('空头止损位在上方', logic.shortTp[0] === 'tp' && logic.shortTp[2] === 600, JSON.stringify(logic.shortTp));
+  check('开仓止损=前5根极值外1tick, 止盈=2R',
+        Math.abs(logic.longBracket[1] - 98.75) < 1e-9 && Math.abs(logic.longBracket[0] - 102.5) < 1e-9
+        && Math.abs(logic.shortBracket[1] - 100.75) < 1e-9 && Math.abs(logic.shortBracket[0] - 98.5) < 1e-9,
+        '多 TP/SL ' + JSON.stringify(logic.longBracket) + ' / 空 ' + JSON.stringify(logic.shortBracket));
+  check('入场当根不判止盈止损', logic.entrySkip.length === 0 && logic.afterSkipPos === 1,
+        JSON.stringify(logic.entrySkip) + ' pos=' + logic.afterSkipPos);
+  check('下一根就扫到 2R → 止盈改挂入场K线另一侧, 不平仓',
+        logic.extend.ev.join() === 'tp_extend:' && Math.abs(logic.extend.tp - 103) < 1e-9 && logic.extend.pos === 1,
+        JSON.stringify(logic.extend));
+  check('改挂之后摸到新止盈才平仓',
+        logic.extendExit.ev.join() === 'tp' && logic.extendExit.pos === 0
+        && Math.abs(logic.extendExit.realized - 150) < 1e-6, JSON.stringify(logic.extendExit));
+  check('止损按前5根极值触发平仓', logic.slExit.ev.join() === 'sl' && logic.slExit.pos === 0
+        && Math.abs(logic.slExit.realized + 62.5) < 1e-6, JSON.stringify(logic.slExit));
+  check('空头止盈在下方', logic.shortTp.ev.join() === 'tp' && Math.abs(logic.shortTp.realized - 75) < 1e-6,
+        JSON.stringify(logic.shortTp));
   check('突破单跳空按开盘价成交', logic.gapFill[1] === 1 && logic.gapFill[2] === 105, JSON.stringify(logic.gapFill));
   check('突破单未触及不成交', logic.notFilled[0] === 0 && logic.notFilled[1] === 1, JSON.stringify(logic.notFilled));
 

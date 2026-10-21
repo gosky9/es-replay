@@ -9,9 +9,23 @@ const Trading = {
   stops: [],               // 突破单 {id, side, qty, price} — 价格穿越 price 即成交
   tp: null,                // 止盈价 (null=未设)
   sl: null,                // 止损价 (null=未设)
-  autoBracket: true,       // 新开仓自动挂 12/6 点止盈止损
+  autoBracket: true,       // 新开仓自动挂止盈止损
   _stopSeq: 1,
   onChange: null,          // 状态变化回调
+
+  /* ---------- 开仓保护口径 (用户 2026-10-22 定) ----------
+     原来是死板的 止损 6 点 / 止盈 12 点, 遇到大波动行情刚开单下一根就被扫掉。
+     现在:
+       止损 = 前 5 根 K 线的极值外 1 个 tick (做多取最低点下方, 做空取最高点上方)
+       止盈 = 入场价 ± 2 × 止损距离 (2R)
+       如果开仓后的第一根就把 2R 扫掉(说明 2R 太近), 改用「入场K线另一侧」继续,
+       这一根不平仓 —— 见 checkBar 里的 _tpGuard 分支。
+     入场那根 K 线本身不判止盈止损: 刚成交就在同一根里被扫, 等于没给行情走的机会。 */
+  SL_LOOKBACK: 5,
+  TP_R: 2,
+  entryBar: null,          // 入场那根 K 线的 {h, l} — 止盈改结构位时要用
+  _entryEpoch: null,       // 入场那根的时间, 用来跳过入场当根的判定
+  _tpGuard: false,         // true = 还没度过"开仓后第一根"
 
   load() {
     try {
@@ -21,6 +35,8 @@ const Trading = {
         this.trades = d.trades || []; this.pos = d.pos || 0;
         this.avg = d.avg || 0; this.realized = d.realized || 0;
         this.stops = d.stops || []; this.tp = d.tp ?? null; this.sl = d.sl ?? null;
+        this.entryBar = d.entryBar || null; this._entryEpoch = d._entryEpoch ?? null;
+        this._tpGuard = !!d._tpGuard;
         this._stopSeq = this.stops.reduce((m, s) => Math.max(m, s.id), 0) + 1;
       }
     } catch (e) { /* ignore */ }
@@ -30,6 +46,7 @@ const Trading = {
     localStorage.setItem('es_replay_trading', JSON.stringify({
       trades: this.trades.slice(-200), pos: this.pos, avg: this.avg, realized: this.realized,
       stops: this.stops, tp: this.tp, sl: this.sl,
+      entryBar: this.entryBar, _entryEpoch: this._entryEpoch, _tpGuard: this._tpGuard,
     }));
     this.onChange && this.onChange();
   },
@@ -37,6 +54,7 @@ const Trading = {
   reset() {
     this.trades = []; this.pos = 0; this.avg = 0; this.realized = 0;
     this.stops = []; this.tp = null; this.sl = null;
+    this.entryBar = null; this._entryEpoch = null; this._tpGuard = false;
     localStorage.removeItem('es_replay_trading');
     this.onChange && this.onChange();
   },
@@ -52,16 +70,37 @@ const Trading = {
   clearStops() { const n = this.stops.length; this.stops = []; this.save(); return n; },
 
   /* ---------- 止盈止损 ---------- */
-  /** 开仓后设置默认保护: 止盈 2R / 止损 1R (ES 点数) */
-  setAutoBrackets(entryPrice) {
+  /** 开仓后设置默认保护 (口径见文件头 SL_LOOKBACK / TP_R)
+   *  @param entryPrice 成交价
+   *  @param prev       入场 K 线之前的 K 线数组 (取最后 5 根算极值)
+   *  @param bar        入场 K 线本身 (记 h/l, 供"止盈改结构位"用)
+   */
+  setAutoBrackets(entryPrice, prev, bar) {
     if (!this.autoBracket) return;
-    const TP = 12, SL = 6;
-    this.tp = this.pos > 0 ? entryPrice + TP : entryPrice - TP;
-    this.sl = this.pos > 0 ? entryPrice - SL : entryPrice + SL;
+    const long = this.pos > 0;
+    const tick = this.TICK || 0.25;
+    let sl;
+    if (prev && prev.length) {
+      const lo = Math.min(...prev.map(b => b.l));
+      const hi = Math.max(...prev.map(b => b.h));
+      sl = long ? lo - tick : hi + tick;          // 极值外一个 tick
+    } else {
+      sl = long ? entryPrice - 6 : entryPrice + 6; // 没有参照 K 线时退回 6 点
+    }
+    let risk = Math.abs(entryPrice - sl);
+    if (!(risk > 0)) {                            // 极值正好压着成交价 → 别挂零距离止损
+      risk = 6;
+      sl = long ? entryPrice - risk : entryPrice + risk;
+    }
+    this.sl = sl;
+    this.tp = long ? entryPrice + risk * this.TP_R : entryPrice - risk * this.TP_R;
+    this.entryBar = bar ? { h: bar.h, l: bar.l } : null;
+    this._tpGuard = true;                         // 等"开仓后第一根"来验一次
   },
 
-  /** 每根新 K 线: 先判突破单触发, 再判止盈止损 */
-  checkBar(bar, epoch, off) {
+  /** 每根新 K 线: 先判突破单触发, 再判止盈止损
+   *  @param ctx {prev} 入场那根之前的 K 线, 供 setAutoBrackets 用 */
+  checkBar(bar, epoch, off, ctx) {
     const ev = [];
     // 1) 突破单: 上破买 / 下破卖 (跳空则按开盘价成交, 更接近真实)
     if (this.stops.length) {
@@ -70,24 +109,41 @@ const Trading = {
         const hit = o.side === 'buy' ? bar.h >= o.price : bar.l <= o.price;
         if (hit) {
           const px = o.side === 'buy' ? Math.max(o.price, bar.o) : Math.min(o.price, bar.o);
-          this.fill(o.side, o.qty, px, 'stop', epoch, off);
+          this.fill(o.side, o.qty, px, 'stop', epoch, off, { bar, prev: ctx && ctx.prev });
           ev.push({ type: 'fill', side: o.side, price: px, qty: o.qty });
         } else remain.push(o);
       }
       this.stops = remain;
     }
-    // 2) 止盈 / 止损 (同一根内两者都触及时按止损优先, 保守处理)
-    if (this.pos !== 0) {
+    // 2) 止盈 / 止损 —— 入场当根不判 (刚成交就在同一根里被扫 = 没给行情走的机会)
+    if (this.pos !== 0 && this._entryEpoch !== epoch) {
       const qty = Math.abs(this.pos);
       const long = this.pos > 0;
       const closeSide = long ? 'sell' : 'buy';
-      if (this.sl != null && (long ? bar.l <= this.sl : bar.h >= this.sl)) {
+      const slHit = this.sl != null && (long ? bar.l <= this.sl : bar.h >= this.sl);
+      let tpHit = this.tp != null && (long ? bar.h >= this.tp : bar.l <= this.tp);
+
+      // 开仓后的第一根就把 2R 扫掉 → 2R 太近(多半是前 5 根贴着入场价, 止损距离很小),
+      // 止盈改用「入场K线另一侧」, 这一根不平仓
+      if (tpHit && this._tpGuard && this.entryBar) {
+        const alt = long ? this.entryBar.h : this.entryBar.l;
+        if (long ? alt > this.tp : alt < this.tp) {
+          this.tp = alt;
+          tpHit = false;
+          ev.push({ type: 'tp_extend', price: alt });
+          this.save();
+        }
+      }
+      this._tpGuard = false;                      // 只保护开仓后的第一根
+
+      // 同一根内两者都触及时按止损优先 (保守处理)
+      if (slHit) {
         const px = this.sl;                    // 先取值: fill() 平光后会把 sl 清成 null
-        this.fill(closeSide, qty, px, 'stop_loss', epoch, off);
+        this.fill(closeSide, qty, px, 'stop_loss', epoch, off, { bar });
         ev.push({ type: 'exit', kind: 'sl', price: px, side: closeSide });
-      } else if (this.tp != null && (long ? bar.h >= this.tp : bar.l <= this.tp)) {
+      } else if (tpHit) {
         const px = this.tp;
-        this.fill(closeSide, qty, px, 'take_profit', epoch, off);
+        this.fill(closeSide, qty, px, 'take_profit', epoch, off, { bar });
         ev.push({ type: 'exit', kind: 'tp', price: px, side: closeSide });
       }
     }
@@ -95,7 +151,7 @@ const Trading = {
   },
 
   /** 开/平仓成交 */
-  fill(side, qty, price, type, epoch, off) {
+  fill(side, qty, price, type, epoch, off, ctx) {
     // side: 'buy' | 'sell'
     const wasFlat = this.pos === 0;
     let pnl = 0, closed = 0;
@@ -131,8 +187,13 @@ const Trading = {
       pnl: closed > 0 ? +pnl.toFixed(2) : null,
     });
     // 仓位变化时维护止盈止损: 新开仓→自动挂, 平光→清空
-    if (wasFlat && this.pos !== 0) this.setAutoBrackets(price);
-    else if (this.pos === 0) { this.tp = null; this.sl = null; }
+    if (wasFlat && this.pos !== 0) {
+      this._entryEpoch = epoch;
+      this.setAutoBrackets(price, ctx && ctx.prev, ctx && ctx.bar);
+    } else if (this.pos === 0) {
+      this.tp = null; this.sl = null;
+      this.entryBar = null; this._entryEpoch = null; this._tpGuard = false;
+    }
     this.save();
     return { pnl, closed };
   },

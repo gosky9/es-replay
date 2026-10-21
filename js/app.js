@@ -801,19 +801,35 @@ const App = {
     this.onLegendIdle();
   },
 
+  /** 美元 → 点 (ES: 1 点 = $50)。右侧面板/交易记录的所有盈亏都走这里
+   *  (用户 2026-10-22: "无论是交易记录还是已实现盈亏, 全部改成多少个点") */
+  ptStr(usd, tight) {
+    const p = (usd || 0) / (Trading.MULT || 50);
+    const s = Number(p.toFixed(2)).toString();     // 12.00→"12", -6.50→"-6.5"
+    return (p > 0 ? '+' : '') + s + (tight ? '' : ' ') + '点';
+  },
+
+  /** 最近 n 根已走出的 K 线 (不含当前这根) —— 新开仓的止损取这里面的极值 */
+  prevBars(n = 5) {
+    const e = this.engine;
+    if (!e || !e.bars || !e.bars.length) return [];
+    return e.bars.slice(Math.max(0, e.idx - n), e.idx);
+  },
+
   renderTrading() {
     const cur = this.engine ? this.engine.current : null;
     const price = cur ? cur.c : 0;
     const $ = id => document.getElementById(id);
     $('stPos').textContent = Trading.pos === 0 ? '0 手' : `${Math.abs(Trading.pos)} 手${Trading.pos > 0 ? '多' : '空'}`;
     $('stAvg').textContent = (Trading.pos === 0 || Trading.avg == null) ? '-' : Trading.avg.toFixed(2);
+    // 盈亏一律按「点」显示 (用户 2026-10-22: 原来写 $, 全部改成多少个点)
     const fp = Trading.floatPnl(price) || 0;
-    $('stFloat').textContent = Trading.pos === 0 ? '-' : (fp >= 0 ? '+' : '') + fp.toFixed(0) + ' $';
+    $('stFloat').textContent = Trading.pos === 0 ? '-' : this.ptStr(fp);
     $('stFloat').className = 'stat-v ' + (fp > 0 ? 'up' : fp < 0 ? 'down' : '');
-    $('stReal').textContent = (Trading.realized >= 0 ? '+' : '') + Trading.realized.toFixed(0) + ' $';
+    $('stReal').textContent = this.ptStr(Trading.realized);
     $('stReal').className = 'stat-v ' + (Trading.realized > 0 ? 'up' : Trading.realized < 0 ? 'down' : '');
     const tp = Trading.totalPnl(price);
-    $('stTotal').textContent = (tp >= 0 ? '+' : '') + tp.toFixed(0) + ' $';
+    $('stTotal').textContent = this.ptStr(tp);
     $('stTotal').className = 'stat-v ' + (tp > 0 ? 'up' : tp < 0 ? 'down' : '');
     const st = Trading.stats();
     $('stWin').textContent = `${st.n} 笔 / ${st.winRate}`;
@@ -833,7 +849,7 @@ const App = {
           <span class="t-time">${String(t.time || '').slice(5, 16)}</span>
           <span class="t-side ${t.side}">${t.side === 'buy' ? '买' : '卖'}${t.qty}手</span>
           <span>@${t.price.toFixed(2)}</span>
-          <span class="t-pnl ${t.pnl == null ? '' : t.pnl >= 0 ? 'up' : 'down'}">${t.pnl == null ? '' : (t.pnl >= 0 ? '+' : '') + t.pnl.toFixed(0) + '$'}</span>
+          <span class="t-pnl ${t.pnl == null ? '' : t.pnl >= 0 ? 'up' : 'down'}">${t.pnl == null ? '' : this.ptStr(t.pnl, true)}</span>
         </div>`).join('');
       }
       if (list.scrollTop) list.scrollTop = 0;
@@ -852,7 +868,8 @@ const App = {
     const cur = this.engine.current;
     const qty = Math.max(1, +document.getElementById('orderQty').value || 1);
     if (this.orderType === 'market') {
-      Trading.fill(side, qty, cur.c, 'market', cur.epoch, cur.off);
+      Trading.fill(side, qty, cur.c, 'market', cur.epoch, cur.off,
+                   { bar: cur, prev: this.prevBars(Trading.SL_LOOKBACK) });
       this.toast(`${side === 'buy' ? '买入' : '卖出'} ${qty} 手 @ ${cur.c.toFixed(2)}`);
       this.renderTrading();
       this.addMarker(side, cur.c);
@@ -910,7 +927,8 @@ const App = {
       if (o.side === 'buy' && bar.l <= o.price) filled = true;
       if (o.side === 'sell' && bar.h >= o.price) filled = true;
       if (filled) {
-        Trading.fill(o.side, o.qty, o.price, 'limit', bar.epoch, bar.off);
+        Trading.fill(o.side, o.qty, o.price, 'limit', bar.epoch, bar.off,
+                     { bar, prev: this.prevBars(Trading.SL_LOOKBACK) });
         this.toast(`限价成交: ${o.side === 'buy' ? '买入' : '卖出'} ${o.qty} 手 @ ${o.price.toFixed(2)}`);
         this.addMarker(o.side, o.price);
       } else remain.push(o);
@@ -922,11 +940,15 @@ const App = {
 
   /** 每根 K 线的交易事件: 突破单触发 + 止盈止损 */
   runTradeChecks(bar) {
-    const evs = Trading.checkBar(bar, bar.epoch, bar.off);
+    // prev = 入场那根之前的 5 根, 用来算"前 5 根极值"止损 (Trading.SL_LOOKBACK)
+    const evs = Trading.checkBar(bar, bar.epoch, bar.off, { prev: this.prevBars(Trading.SL_LOOKBACK) });
     for (const ev of evs) {
       if (ev.type === 'fill') {
         this.toast(`突破${ev.side === 'buy' ? '买入' : '卖出'}成交 ${ev.qty} 手 @ ${ev.price.toFixed(2)}`);
         this.addMarker(ev.side, ev.price);
+      } else if (ev.type === 'tp_extend') {
+        // 开仓后第一根就扫到 2R → 2R 太近, 止盈改挂到入场K线另一侧
+        this.toast(`2R 太近(下一根就扫到), 止盈已改挂到入场K线另一侧 ${ev.price.toFixed(2)}`);
       } else {
         const isTp = ev.kind === 'tp';
         this.toast(`${isTp ? '止盈' : '止损'}触发 @ ${ev.price.toFixed(2)} · 已平仓`);
