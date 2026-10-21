@@ -250,8 +250,9 @@ const waitLoaded = page => page.waitForFunction(
   check('买入开仓', (await page.textContent('#stPos')).includes('多'),
         await page.textContent('#stPos') + ' 记录' + await page.textContent('#tradeCount'));
   check('成交标记', (await page.evaluate(() => ChartMgr.markers.length)) === 1);
-  check('浮动盈亏按点显示(不再是美元)', /点$/.test(await page.textContent('#stFloat'))
-        && !/\$/.test(await page.textContent('#stFloat')), await page.textContent('#stFloat'));
+  const NUM = /^[+-]?\d+(\.\d+)?$/;   // 纯数字: 不带「点」「手」「$」
+  check('浮动盈亏只显示数字(无 $ / 无「点」)', NUM.test((await page.textContent('#stFloat')).trim()),
+        await page.textContent('#stFloat'));
 
   /* 交易线上的牌子按"点"显示 (不是美元): 1 点 = $50, 所以点数 = 价格差 */
   const ptsChip = await page.evaluate(() => {
@@ -300,12 +301,23 @@ const waitLoaded = page => page.waitForFunction(
   await page.waitForTimeout(250);
   check('平仓归零', (await page.textContent('#stPos')) === '0 手', await page.textContent('#stPos'));
   const real = await page.textContent('#stReal');
-  check('已实现盈亏按点显示(不再是美元)', /点$/.test(real) && !/\$/.test(real) && real !== '-',
+  check('已实现盈亏只显示数字(无 $ / 无「点」)', NUM.test(real.trim()) && real !== '-',
         real + ' / 合计 ' + await page.textContent('#stTotal'));
-  const trPnl = await page.evaluate(() =>
-    [...document.querySelectorAll('#tradeList .t-pnl')].map(e => e.textContent.trim()).filter(Boolean));
-  check('交易记录盈亏也按点显示', trPnl.length > 0 && trPnl.every(s => /点$/.test(s) && !/\$/.test(s)),
-        JSON.stringify(trPnl.slice(0, 4)));
+  const trRows = await page.evaluate(() =>
+    [...document.querySelectorAll('#tradeList .trade-item')].map(r => ({
+      time: r.querySelector('.t-time').textContent.trim(),
+      side: r.querySelector('.t-side').textContent.trim(),
+      px: r.querySelector('.t-price').textContent.trim(),
+      pnl: r.querySelector('.t-pnl').textContent.trim(),
+      cols: [...r.children].map(c => Math.round(c.getBoundingClientRect().left)),
+    })));
+  check('交易记录方向不带「手」', trRows.length > 0 && trRows.every(r => /^[买卖]\d+$/.test(r.side)),
+        JSON.stringify(trRows.map(r => r.side)));
+  check('交易记录盈亏只显示数字', trRows.every(r => !r.pnl || NUM.test(r.pnl)),
+        JSON.stringify(trRows.map(r => r.pnl)));
+  check('交易记录四列逐行对齐',
+        trRows.length > 1 && trRows.every(r => r.cols.every((x, i) => Math.abs(x - trRows[0].cols[i]) <= 1)),
+        JSON.stringify(trRows.map(r => r.cols)));
   check('胜率统计', /笔/.test(await page.textContent('#stWin')), await page.textContent('#stWin'));
 
   /* 8. 周期切换 (顶栏快捷按钮) —— 默认已是 5m, 这里切到 15m 再验证 */
@@ -1580,6 +1592,78 @@ const waitLoaded = page => page.waitForFunction(
   check('继续上次落在同一根 K 线上',
         resumed.idx === resumeSaved.idx && resumed.tf === resumeSaved.tf,
         `idx ${resumeSaved.idx}→${resumed.idx} · ${resumeSaved.time} / ${resumed.time}`);
+
+  /* 19. 日报跳转 (data/reports.json + 时间轴下划线 + 点击新标签页)
+   *  关键口径 (用户 2026-10-22): 有日报的日期数字下加短下划线; 整条时间轴都能点;
+   *  下划线只画在"库真正显示了日期数字刻度"的那几天 (日内图日刻度隔天稀疏, 不是每天都有) */
+  await page.fill('#gotoInput', '2024-03-15 11:00');
+  await page.click('#gotoBtn');
+  await page.waitForTimeout(1200);
+  await page.evaluate(() => App.engine.pause());
+  await page.click('#tfGroup button[data-tf="1h"]');      // 切 1h: 一个窗口覆盖多天
+  await page.waitForTimeout(1400);
+  await page.evaluate(() => App.engine.pause());
+  await page.waitForTimeout(400);
+
+  check('日报索引已加载 (2928 天)', (await page.evaluate(() => Reports.ready() && Reports.size())) > 2500,
+        await page.evaluate(() => String(Reports.size())));
+
+  const repMark = await page.evaluate(() => {
+    const marks = Draw.reportMarks();
+    const tickDates = (ChartMgr._dayTickTimes || []).map(chartDateStr);
+    return {
+      n: marks.length,
+      dates: marks.map(m => m.date),
+      allInTicks: marks.every(m => tickDates.includes(m.date)),   // 下划线必须全落在日刻度上
+      allHaveReport: marks.every(m => Reports.has(m.date)),
+      xInRange: marks.every(m => m.x > 0 && m.x < Draw.W),
+    };
+  });
+  check('1h 窗口有时间轴日报下划线', repMark.n >= 3, 'n=' + repMark.n + ' ' + repMark.dates.join(','));
+  check('下划线只画在库显示日期数字的刻度下 (不落在 12:30 等时分刻度下)', repMark.allInTicks,
+        JSON.stringify(repMark.dates));
+  check('下划线日期全部有日报', repMark.allHaveReport);
+  check('下划线 x 在画布内', repMark.xInRange);
+
+  // 点击有日报的那天 → 新标签页打开正确 URL
+  const repTarget = await page.evaluate(() => {
+    const m = Draw.reportMarks().find(m => m.x > 60 && m.x < Draw.W - 120);
+    return m && { x: Math.round(m.x), d: m.date, url: m.url };
+  });
+  if (repTarget) {
+    const cb = await page.locator('#drawLayer').boundingBox();
+    const axisY = cb.y + await page.evaluate(() => Draw._priceAreaHeight()) + 14;
+    const popupP = page.context().waitForEvent('page', { timeout: 4000 }).catch(() => null);
+    await page.mouse.click(cb.x + repTarget.x, axisY);
+    const popup = await popupP;
+    check('点日期数字 → 新标签页打开该日日报', !!popup && popup.url() === repTarget.url,
+          repTarget.d + ' → ' + (popup ? popup.url() : '没弹'));
+    if (popup) await popup.close();
+
+    // 点一个无日报的日子 → 不弹
+    const emptyDay = await page.evaluate(() => {
+      const bars = ChartMgr._lastData, ts = ChartMgr.chart.timeScale();
+      for (let i = 1; i < bars.length; i++) {
+        const d = etDateStr(bars[i].epoch, bars[i].off);
+        if (etDateStr(bars[i - 1].epoch, bars[i - 1].off) === d || Reports.has(d)) continue;
+        const x = ts.logicalToCoordinate(i);
+        if (x == null || x < 30 || x > Draw.W - 90) continue;
+        return { x: Math.round(x), d };
+      }
+      return null;
+    });
+    if (emptyDay) {
+      const p2P = page.context().waitForEvent('page', { timeout: 2200 }).catch(() => null);
+      await page.mouse.click(cb.x + emptyDay.x, axisY);
+      const p2 = await p2P;
+      check('点无日报的日期 → 不弹', !p2, emptyDay.d);
+      if (p2) await p2.close();
+    }
+  }
+
+  // 切回 5m, 恢复后面的截图状态
+  await page.click('#tfGroup button[data-tf="5m"]');
+  await page.waitForTimeout(600);
 
   /* 15. 截图 + 错误汇总 */
   await page.click('#btnRestart');

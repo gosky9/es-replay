@@ -1,5 +1,12 @@
 /* ============ chart.js — lightweight-charts v5 封装 (TradingView 风格) ============ */
 
+/* 全局 rAF 帧号: tickMarkFormatter 靠它区分"同一帧内的连续调用"。
+   日报下划线只画在库真正显示了"日期数字刻度"(type===2)的那几天下面 ——
+   日内图里日刻度是隔天稀疏的(不是每天都有日期数字), 用这个帧号保证
+   每帧只保留当帧的刻度, 上一帧的自动作废, 不会画到时分刻度下面去。 */
+let __rafFrame = 0;
+(function __rafLoop() { __rafFrame++; requestAnimationFrame(__rafLoop); })();
+
 /* ---------------- Bar Count 图元 ----------------
    为什么挂在 series 上, 而不是画在我们自己的 #drawLayer 里:
    那张 canvas 是独立的 requestAnimationFrame 重绘, 跟图表自己的渲染循环差一帧 ——
@@ -169,6 +176,16 @@ const ChartMgr = {
         rightOffset: 6, barSpacing: 7,
         fixLeftEdge: false, lockVisibleTimeRangeOnResize: true,
         tickMarkFormatter: (time, type) => {
+          // 记录本帧"日刻度"(type===2), 供 draw.js 的日报下划线定位。
+          // 只有库真的显示了日期数字的那几天才有资格画线(日内图里日刻度隔天稀疏)。
+          if (type === 2) {
+            if (!ChartMgr._dayTickTimes) ChartMgr._dayTickTimes = [];
+            if (ChartMgr._dayTickFrame !== __rafFrame) {
+              ChartMgr._dayTickFrame = __rafFrame;
+              ChartMgr._dayTickTimes.length = 0;
+            }
+            ChartMgr._dayTickTimes.push(time);
+          }
           // 日/3日/周/月线的 time 是 "YYYY-MM-DD" 字符串, 直接 *1000 会得到 NaN
           // 日刻度只出数字, 不带「日」字 (用户 2026-10-22 要求: 屏幕最下面那条时间轴 xx日 → xx)
           if (typeof time === 'string') {

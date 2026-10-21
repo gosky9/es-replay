@@ -201,6 +201,16 @@ function etDateStr(epoch, off) {
   return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate());
 }
 
+/** 图表时间(已经是"ET 墙钟编码成的假 UTC") → yyyy-mm-dd
+ *  时间轴刻度的 time 可能是数字 / "YYYY-MM-DD" 字符串 / BusinessDay 对象, 三种都要认 */
+function chartDateStr(t) {
+  const p = n => String(n).padStart(2, '0');
+  if (typeof t === 'string') return t;
+  if (t && typeof t === 'object') return `${t.year}-${p(t.month)}-${p(t.day)}`;
+  const d = new Date(t * 1000);
+  return d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate());
+}
+
 /** ET 墙钟各字段 */
 function etParts(epoch, off) {
   const d = new Date((epoch + off * 3600) * 1000);

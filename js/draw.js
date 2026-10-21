@@ -53,6 +53,8 @@ const Draw = {
     // 没有绘制/拖拽时 onMove/onUp 立刻返回, 不影响十字光标、图表平移和页面其它交互。
     document.addEventListener('mousemove', e => this.onMove(e), true);
     document.addEventListener('mouseup', e => this.onUp(e), true);
+    // 时间轴: 有日报的日期可以点开 (新标签页)
+    this.bindReportClicks(area);
 
     this.resize();
     new ResizeObserver(() => this.resize()).observe(area);
@@ -749,6 +751,7 @@ const Draw = {
     //     (用户截图里箭头也是压在色带之上的饱和色)
     this.drawOrderLines(ctx);          // 交易线不受"隐藏绘图"影响
     this.drawTradeMarkers(ctx);        // 成交大箭头 (K 线上方卖 / 下方买)
+    this.drawReportMarks(ctx);         // 时间轴: 有日报的日期下加短下划线 (也不受"隐藏绘图"影响)
     if (this.hidden) return;
 
     for (const it of this.items.slice().sort((p, q) => (p.z || 0) - (q.z || 0))) {
@@ -757,7 +760,122 @@ const Draw = {
     if (this.draft) this.drawItem(ctx, this.draft, false, true);
   },
 
-  /* ---------- 成交标记: 大箭头 ----------
+  /* ---------- 时间轴: E-mini 日报索引 ----------
+     数据来自 data/reports.json (tools/build_reports.py 从 xlsx 生成)。
+     有日报的那一天, 在时间轴数字下方画一条短下划线; 时间轴任意位置都能点开那天,
+     点击用 window.open 新开标签页。用户 2026-10-22 定的口径:
+       「能点的加下划线, 不能点的保持原样; 整条时间轴都能点」。 */
+  REPORT_MARK: { w: 14, h: 2, gap: 9 },   // 下划线宽 / 粗 / 相邻标记最小间距
+
+  /** 可见范围内每个"有日报的日期刻度" → [{x, date, url}]
+   *  关键: 只认库真正画出来的"日期数字刻度"(type===2, 由 chart.js 的 tickMarkFormatter
+   *  逐帧记录到 ChartMgr._dayTickTimes), 不再按"每天第一根 bar"猜 —— 日内图里日刻度
+   *  是隔天稀疏的, 首根 bar 的 x 常落在 12:30 这类时分刻度下面。 */
+  reportMarks() {
+    if (typeof Reports === 'undefined' || !Reports.ready()) return [];
+    const ticks = (typeof ChartMgr !== 'undefined' && ChartMgr._dayTickTimes) || [];
+    if (!ticks.length) return [];
+    const ts = ChartMgr.chart.timeScale();
+    const out = [];
+    const seen = {};
+    let lastX = -1e9;
+    for (const time of ticks) {
+      const d = chartDateStr(time);
+      if (!d || seen[d]) continue;
+      seen[d] = true;
+      const r = Reports.get(d);
+      if (!r) continue;
+      let x = null;
+      try { x = ts.timeToCoordinate(time); } catch (e) { x = null; }
+      if (x == null || !isFinite(x)) continue;
+      if (x < 0 || x > this.W) continue;
+      if (x - lastX < this.REPORT_MARK.gap) continue;     // 挤在一起就跳过, 免得糊成一条线
+      lastX = x;
+      out.push({ x, date: d, url: r.u, title: r.t });
+    }
+    return out;
+  },
+
+  drawReportMarks(ctx) {
+    this._reportXs = null;
+    const marks = this.reportMarks();
+    if (!marks.length) return;
+    const top = this._priceAreaHeight();
+    if (!(top > 0) || top >= this.H - 6) return;
+    const c = (typeof ChartMgr !== 'undefined' && ChartMgr.theme === 'dark') ? '#5b8dff' : '#2962ff';
+    const y = this.H - 4.5;                 // 贴着时间轴底边, 不压刻度文字
+    const half = this.REPORT_MARK.w / 2;
+    ctx.save();
+    ctx.strokeStyle = c;
+    ctx.lineWidth = this.REPORT_MARK.h;
+    ctx.lineCap = 'round';
+    for (const m of marks) {
+      ctx.beginPath();
+      ctx.moveTo(Math.round(m.x - half) + 0.5, y);
+      ctx.lineTo(Math.round(m.x + half) + 0.5, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+    this._reportXs = marks;                  // 点击/手势不用它, 留作自检
+  },
+
+  /** 鼠标 x → 该位置所属的 ET 日期 "YYYY-MM-DD"
+   *  按"最近的 K 线下标"取, 不用时间反查 —— 时间坐标是连续量, 缩得很小时
+   *  coordinateToTime 会把边界上的点判到隔壁那一天去 (实测会误开邻日的日报)。 */
+  dateAtX(x) {
+    const bars = ChartMgr._lastData;
+    if (!bars || !bars.length) return null;
+    const ts = ChartMgr.chart.timeScale();
+    const l = ts.coordinateToLogical(x);
+    if (l == null || !isFinite(l)) return null;
+    // 左右空白区不归属任何一天, 免得点了打开"最后一天"的日报
+    if (l < -0.5 || l > bars.length - 0.5) return null;
+    const i = Math.max(0, Math.min(bars.length - 1, Math.round(l)));
+    const b = bars[i];
+    return (b && b.epoch != null) ? etDateStr(b.epoch, b.off) : null;
+  },
+
+  /** 时间轴区域点击 → 打开那天的日报 (新标签页)。拖动时间轴缩放不算点击。 */
+  bindReportClicks(area) {
+    if (this._reportClickBound) return;
+    this._reportClickBound = true;
+    let downX = 0, downY = 0, onAxis = false;
+
+    area.addEventListener('mousedown', e => {
+      if (e.button !== 0) { onAxis = false; return; }
+      const p = this._pos(e);
+      onAxis = p.y > this._priceAreaHeight();
+      downX = e.clientX; downY = e.clientY;
+    }, true);
+
+    area.addEventListener('mouseup', e => {
+      if (!onAxis || e.button !== 0) return;
+      onAxis = false;
+      // 位移超过 4px 当成"拖时间轴缩放", 不跳转
+      if (Math.abs(e.clientX - downX) > 4 || Math.abs(e.clientY - downY) > 4) return;
+      if (typeof Reports === 'undefined' || !Reports.ready()) return;
+      const p = this._pos(e);
+      if (p.y <= this._priceAreaHeight()) return;
+      const d = this.dateAtX(p.x);
+      const r = d && Reports.get(d);
+      if (!r) return;
+      e.preventDefault(); e.stopPropagation();
+      window.open(r.u, '_blank', 'noopener');
+      if (typeof App !== 'undefined' && App.toast) App.toast(`打开 ${d} 的日报: ${r.t || r.u}`);
+    }, true);
+
+    // hover: 那天有日报就变手型, 让人看得出能点
+    area.addEventListener('mousemove', e => {
+      if (typeof Reports === 'undefined' || !Reports.ready()) return;
+      const p = this._pos(e);
+      const on = p.y > this._priceAreaHeight();
+      const d = on ? this.dateAtX(p.x) : null;
+      const want = (d && Reports.get(d)) ? 'pointer' : '';
+      if (area.style.cursor !== want) area.style.cursor = want;
+    }, true);
+  },
+
+  /** 成交标记: 大箭头 ----------
      照用户 2026-10-22 截图逐像素描出来: 杆 19×18 + 三角头 33×20, 总 33×38, 平头平尾无描边。
      买 = K 线下方、箭头朝上、青绿 #70ccbd; 卖 = K 线上方、朝下、红 #cc2f3c。 */
   arrowShape(ctx, cx, cy, dir) {

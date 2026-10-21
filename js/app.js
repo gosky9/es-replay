@@ -36,6 +36,10 @@ const App = {
     this.initStartModal();            // 有上次位置时, 弹窗默认选中「继续上次」
     this.renderTrading();
     this.startClock();
+    // 日报索引 (时间轴日期跳转): 后台拉, 拉到就补一帧, 把有日报的日期标记画出来
+    if (typeof Reports !== 'undefined') {
+      Reports.load().then(() => { try { Draw.render(); } catch (e) { /* 还没建图, 无所谓 */ } });
+    }
     // 提示气泡要贴着鼠标走, 记一下最后位置
     window.addEventListener('mousemove', e => { this._mx = e.clientX; this._my = e.clientY; }, { passive: true });
   },
@@ -802,11 +806,11 @@ const App = {
   },
 
   /** 美元 → 点 (ES: 1 点 = $50)。右侧面板/交易记录的所有盈亏都走这里
-   *  (用户 2026-10-22: "无论是交易记录还是已实现盈亏, 全部改成多少个点") */
-  ptStr(usd, tight) {
+   *  (用户 2026-10-22: "无论是交易记录还是已实现盈亏, 全部改成多少个点" -> 再去掉"点"字只留数字) */
+  ptStr(usd) {
     const p = (usd || 0) / (Trading.MULT || 50);
     const s = Number(p.toFixed(2)).toString();     // 12.00→"12", -6.50→"-6.5"
-    return (p > 0 ? '+' : '') + s + (tight ? '' : ' ') + '点';
+    return (p > 0 ? '+' : '') + s;
   },
 
   /** 最近 n 根已走出的 K 线 (不含当前这根) —— 新开仓的止损取这里面的极值 */
@@ -847,9 +851,9 @@ const App = {
         list.innerHTML = Trading.trades.slice().reverse().map(t => `
         <div class="trade-item">
           <span class="t-time">${String(t.time || '').slice(5, 16)}</span>
-          <span class="t-side ${t.side}">${t.side === 'buy' ? '买' : '卖'}${t.qty}手</span>
-          <span>@${t.price.toFixed(2)}</span>
-          <span class="t-pnl ${t.pnl == null ? '' : t.pnl >= 0 ? 'up' : 'down'}">${t.pnl == null ? '' : this.ptStr(t.pnl, true)}</span>
+          <span class="t-side ${t.side}">${t.side === 'buy' ? '买' : '卖'}${t.qty}</span>
+          <span class="t-price">@${t.price.toFixed(2)}</span>
+          <span class="t-pnl ${t.pnl == null ? '' : t.pnl >= 0 ? 'up' : 'down'}">${t.pnl == null ? '' : this.ptStr(t.pnl)}</span>
         </div>`).join('');
       }
       if (list.scrollTop) list.scrollTop = 0;

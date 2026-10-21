@@ -330,14 +330,18 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
 .stat-v.down { color: var(--short); }  /* 亏损 */
 
 .trade-list { flex: 1; overflow-y: auto; font-size: 12px; }
+/* 四列固定栅格: 时间 / 方向 / 价格 / 盈亏 —— 每行必须对齐 (原来 flex space-between,
+   是否带盈亏会把价格推来推去, 看起来是歪的) */
 .trade-item {
-  display: flex; justify-content: space-between; gap: 6px; padding: 6px 8px;
+  display: grid; grid-template-columns: 74px 40px 1fr 54px;
+  align-items: baseline; column-gap: 6px; padding: 6px 8px;
   border-radius: 4px; margin-bottom: 4px; background: var(--bg-sunken);
 }
 .trade-item .t-time { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .trade-item .t-side.buy { color: var(--long); font-weight: 600; }
 .trade-item .t-side.sell { color: var(--short); font-weight: 600; }
-.trade-item .t-pnl { font-variant-numeric: tabular-nums; }
+.trade-item .t-price { text-align: right; font-variant-numeric: tabular-nums; }
+.trade-item .t-pnl { text-align: right; font-variant-numeric: tabular-nums; }
 .trade-item .t-pnl.up { color: var(--long); }    /* 盈利 */
 .trade-item .t-pnl.down { color: var(--short); } /* 亏损 */
 .trade-empty { color: var(--text-dim); text-align: center; padding: 24px 0; font-size: 12px; }
