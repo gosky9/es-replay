@@ -367,6 +367,22 @@
     <div class="panel">
       <div class="panel-title">下单</div>
       <div class="order-row">
+        <label class="row-label">市场周期</label>
+        <div class="seg seg-xs cycle-seg" id="cycleSeg">
+          <button data-cycle="breakout">突破</button>
+          <button data-cycle="tight">窄通道</button>
+          <button data-cycle="broad">宽通道</button>
+          <button data-cycle="range">区间</button>
+        </div>
+      </div>
+      <div class="order-row">
+        <label class="row-label">Setup</label>
+        <button id="setupPick" class="setup-pick" title="点击选择本条交易的 setup（必选）">
+          <span id="setupPickText" class="setup-pick-text">未选择</span>
+          <span class="setup-pick-caret">▾</span>
+        </button>
+      </div>
+      <div class="order-row">
         <div class="seg seg-sm" id="dirSeg">
           <button data-dir="buy" class="active">买入/做多</button>
           <button data-dir="sell">卖出/做空</button>
@@ -410,11 +426,56 @@
     </div>
 
     <div class="panel panel-grow">
-      <div class="panel-title">交易记录 <span class="panel-title-sub" id="tradeCount">(0)</span></div>
+      <div class="tabs" id="sideTabs">
+        <button data-tab="trades" class="active">交易记录 <span class="panel-title-sub" id="tradeCount">(0)</span></button>
+        <button data-tab="stats">Setup 统计</button>
+      </div>
       <div id="tradeList" class="trade-list"></div>
+      <div id="statsPane" class="stats-pane" style="display:none"></div>
     </div>
   </aside>
 </main>
+
+<!-- ============ Setup 选择弹窗 (下单前必选) ============ -->
+<div id="setupModal" class="modal-mask" style="display:none;">
+  <div class="modal setup-modal">
+    <button class="modal-x" id="setupModalClose" title="取消，这次不下单">✕</button>
+    <div class="modal-title">这笔按什么入场</div>
+    <div class="modal-sub">Setup 必选 · 选完立刻执行刚才那笔下单</div>
+    <div class="setup-cycles">
+      <span class="setup-cycles-label">市场周期</span>
+      <div class="seg seg-xs" id="setupCycleSeg">
+        <button data-cycle="breakout">突破</button>
+        <button data-cycle="tight">窄通道</button>
+        <button data-cycle="broad">宽通道</button>
+        <button data-cycle="range">区间</button>
+      </div>
+    </div>
+    <div class="setup-list" id="setupList"></div>
+    <div class="setup-foot">
+      <button id="setupAddBtn" class="btn-ghost">+ 新增</button>
+      <button id="setupManageBtn" class="btn-ghost">管理</button>
+      <button id="setupCancelBtn" class="btn-ghost">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Setup 管理弹窗 (改名 / 新增 / 停用) ============ -->
+<div id="manageModal" class="modal-mask" style="display:none;">
+  <div class="modal manage-modal">
+    <button class="modal-x" id="manageModalClose" title="关闭">✕</button>
+    <div class="modal-title">管理 Setup</div>
+    <div class="modal-sub">改名不影响历史统计（按 id 聚合）；停用的不出现在下单列表里，历史仍保留</div>
+    <div class="manage-add">
+      <input id="manageNewName" type="text" placeholder="新 setup 名称" maxlength="24">
+      <button id="manageAddBtn" class="btn-ghost">添加</button>
+    </div>
+    <div class="manage-list" id="manageList"></div>
+    <div class="setup-foot">
+      <button id="manageDoneBtn" class="btn-ghost">完成</button>
+    </div>
+  </div>
+</div>
 
 <!-- ============ 开始弹窗 ============ -->
 <div id="startModal" class="modal-mask">
@@ -503,10 +564,12 @@
 
 <div id="toast" class="toast"></div>
 <div id="tip"></div>
+<input type="file" id="journalImport" accept=".json,application/json" hidden>
 
 <script src="vendor/lightweight-charts.standalone.production.js"></script>
 <script src="js/data.js"></script>
 <script src="js/reports.js"></script>
+<script src="js/journal.js"></script>
 <script src="js/chart.js"></script>
 <script src="js/draw.js"></script>
 <script src="js/replay.js"></script>

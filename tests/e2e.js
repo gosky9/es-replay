@@ -16,6 +16,10 @@ function check(name, ok, detail) {
 const num = s => +(String(s).split('/')[0].trim());
 const waitLoaded = page => page.waitForFunction(
   () => document.getElementById('loadingMask').style.display === 'none', { timeout: 40000 });
+/* v1.1: 下单前必须打标 (setup + 市场周期) —— 测试里直接预置, 免得每次都走弹窗 */
+const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c]) => {
+  App.pendingSetup = i; App.pendingCycle = c; App.syncSetupUI();
+}, [id, cycle]);
 
 (async () => {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -31,6 +35,16 @@ const waitLoaded = page => page.waitForFunction(
     return n && n.textContent && !n.textContent.includes('加载中') && !n.textContent.includes('失败');
   }, { timeout: 20000 });
   check('meta.json 加载', true, (await page.textContent('#dataRangeNote')).slice(0, 56));
+
+  /* 账本会真的写进 data/journal.json —— 先备份, 跑完还原, 别污染真实练习记录 */
+  const journalBackup = await page.evaluate(async () => {
+    try { const r = await fetch('/api/journal', { cache: 'no-store' }); return await r.json(); }
+    catch (e) { return { version: 1, trades: [], orders: [] }; }
+  });
+  await page.evaluate(async () => {
+    await fetch('/api/journal', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: 1, trades: [], orders: [] }) });
+  });
   check('开始弹窗显示', await page.isVisible('#startModal'));
 
   const theme0 = await page.evaluate(() => document.body.dataset.theme);
@@ -245,6 +259,7 @@ const waitLoaded = page => page.waitForFunction(
   check('跟随态下新 bar 始终可见', allVisible, detail.join(' | '));
 
   /* 7. 下单 / 盈亏 / 平仓 */
+  await giveSetup(page);
   await page.click('#btnBuy');
   await page.waitForTimeout(250);
   check('买入开仓', (await page.textContent('#stPos')).includes('多'),
@@ -303,21 +318,35 @@ const waitLoaded = page => page.waitForFunction(
   const real = await page.textContent('#stReal');
   check('已实现盈亏只显示数字(无 $ / 无「点」)', NUM.test(real.trim()) && real !== '-',
         real + ' / 合计 ' + await page.textContent('#stTotal'));
+  // 再开平一次, 让列表有两行, 好验"逐行对齐"
+  await giveSetup(page);
+  await page.click('#btnBuy');
+  await page.waitForTimeout(200);
+  await page.click('#btnClose');
+  await page.waitForTimeout(300);
+
+  /* 交易记录改成一笔交易一行: Setup / 方向 / R / 时间·周期·点数 */
   const trRows = await page.evaluate(() =>
     [...document.querySelectorAll('#tradeList .trade-item')].map(r => ({
-      time: r.querySelector('.t-time').textContent.trim(),
+      setup: r.querySelector('.t-setup').textContent.trim(),
       side: r.querySelector('.t-side').textContent.trim(),
-      px: r.querySelector('.t-price').textContent.trim(),
-      pnl: r.querySelector('.t-pnl').textContent.trim(),
-      cols: [...r.children].map(c => Math.round(c.getBoundingClientRect().left)),
+      r: r.querySelector('.t-r').textContent.trim(),
+      sub: [...r.querySelector('.t-sub').children].map(c => c.textContent.trim()),
+      topLeft: Math.round(r.querySelector('.t-top').getBoundingClientRect().left),
+      rRight: Math.round(r.querySelector('.t-r').getBoundingClientRect().right),
     })));
-  check('交易记录方向不带「手」', trRows.length > 0 && trRows.every(r => /^[买卖]\d+$/.test(r.side)),
+  check('交易记录一笔交易一行', trRows.length > 0 && trRows.every(r => r.setup && r.sub.length === 3),
+        trRows.length + ' 行 · ' + JSON.stringify(trRows[0] || null));
+  check('交易记录方向是 多/空 (不带手数)', trRows.every(r => /^[多空]$/.test(r.side)),
         JSON.stringify(trRows.map(r => r.side)));
-  check('交易记录盈亏只显示数字', trRows.every(r => !r.pnl || NUM.test(r.pnl)),
-        JSON.stringify(trRows.map(r => r.pnl)));
-  check('交易记录四列逐行对齐',
-        trRows.length > 1 && trRows.every(r => r.cols.every((x, i) => Math.abs(x - trRows[0].cols[i]) <= 1)),
-        JSON.stringify(trRows.map(r => r.cols)));
+  check('交易记录盈亏用 R (数字+R, 无美元符号)',
+        trRows.every(r => r.r === '–' || /^[+-]?\d+(\.\d+)?R$/.test(r.r)),
+        JSON.stringify(trRows.map(r => r.r)));
+  check('交易记录逐行左对齐 + R 右对齐',
+        trRows.length > 1 && trRows.every(r => Math.abs(r.topLeft - trRows[0].topLeft) <= 1
+                                              && Math.abs(r.rRight - trRows[0].rRight) <= 1),
+        JSON.stringify(trRows.map(r => [r.topLeft, r.rRight])));
+  check('交易记录带 Setup 名', trRows.every(r => r.setup.length > 0), JSON.stringify(trRows.map(r => r.setup)));
   check('胜率统计', /笔/.test(await page.textContent('#stWin')), await page.textContent('#stWin'));
 
   /* 8. 周期切换 (顶栏快捷按钮) —— 默认已是 5m, 这里切到 15m 再验证 */
@@ -391,6 +420,7 @@ const waitLoaded = page => page.waitForFunction(
   check('限价单价格有效', lp > 0 && Math.abs(lp * 4 - Math.round(lp * 4)) < 1e-6, '挂单价 ' + lp);
   const tradesBefore = await page.evaluate(() => Trading.trades.length);
   await page.fill('#limitPrice', String(lp));
+  await giveSetup(page);
   await page.click('#btnBuy');
   await page.waitForTimeout(250);
   check('限价挂单', await page.evaluate(() => (App._limits || []).length === 1), '挂单价 ' + lp);
@@ -716,6 +746,8 @@ const waitLoaded = page => page.waitForFunction(
   const logic = await page.evaluate(() => {
     const mk = (o, h, l, c, epoch) => ({ o, h, l, c, epoch: epoch || 0, off: 0, t: 0 });
     const R = {};
+    // v1.1 新增的 risk_locked 只是「R 的分母已锁定」通知, 不属于止盈止损事件
+    const clean = (xs) => xs.filter(e => e.type !== 'risk_locked').map(e => e.kind || e.type);
     // 前 5 根: 最低 99, 最高 100.5 → 做多入场 100, 止损 99-0.25=98.75, 风险 1.25, 止盈 102.5
     const prev = [mk(100, 100.5, 99.5, 100), mk(100, 100.5, 99, 100), mk(100, 100.5, 99.2, 100),
                   mk(100, 100.5, 99.4, 100), mk(100, 100.5, 99.1, 100)];
@@ -729,23 +761,23 @@ const waitLoaded = page => page.waitForFunction(
     R.afterSkipPos = Trading.pos;
     // 开仓后第一根就扫到 2R(102.5) → 改挂入场K线另一侧(103), 不平仓
     const ev1 = Trading.checkBar(mk(101, 103, 100, 102.8, 60), 60, 0);
-    R.extend = { ev: ev1.map(e => e.type + ':' + (e.kind || '')), tp: Trading.tp, pos: Trading.pos };
+    R.extend = { ev: ev1.filter(e => e.type !== 'risk_locked').map(e => e.type + ':' + (e.kind || '')), tp: Trading.tp, pos: Trading.pos };
     // 再下一根摸到新止盈 103 → 正常平仓, (103-100)*50 = 150
     const ev2 = Trading.checkBar(mk(102, 104, 101, 103.5, 120), 120, 0);
-    R.extendExit = { ev: ev2.map(e => e.kind || e.type), pos: Trading.pos, realized: Trading.realized };
+    R.extendExit = { ev: clean(ev2), pos: Trading.pos, realized: Trading.realized };
 
     // 止损: 前 5 根最低 99 → 98.75, 下一根跌到 97 触发, (98.75-100)*50 = -62.5
     Trading.reset();
     Trading.fill('buy', 1, 100, 'market', 0, 0, { bar: mk(100, 100.5, 99.8, 100, 0), prev });
     const ev3 = Trading.checkBar(mk(99, 99.5, 97, 97.5, 60), 60, 0);
-    R.slExit = { ev: ev3.map(e => e.kind || e.type), pos: Trading.pos, realized: Trading.realized };
+    R.slExit = { ev: clean(ev3), pos: Trading.pos, realized: Trading.realized };
 
     // 空头: 前 5 根最高 100.5 → 止损 100.75, 风险 0.75, 止盈 98.5
     Trading.reset();
     Trading.fill('sell', 1, 100, 'market', 0, 0, { bar: mk(100, 100.5, 99.5, 100, 0), prev });
     R.shortBracket = [Trading.tp, Trading.sl];
     const ev4 = Trading.checkBar(mk(99, 100.4, 98.2, 98.6, 60), 60, 0);
-    R.shortTp = { ev: ev4.map(e => e.kind || e.type), pos: Trading.pos, realized: Trading.realized };
+    R.shortTp = { ev: clean(ev4), pos: Trading.pos, realized: Trading.realized };
 
     Trading.reset();
     Trading.placeStop('buy', 1, 100);
@@ -789,6 +821,7 @@ const waitLoaded = page => page.waitForFunction(
   await page.mouse.click(P(420, plan.y - 2).x, P(420, plan.y - 2).y, { button: 'right' });
   await page.waitForTimeout(180);
   check('右键弹出菜单', (await page.evaluate(() => document.getElementById('ctxMenu').style.display)) === 'block');
+  await giveSetup(page);
   await page.click('#ctxMenu button[data-act="buyStop"]');
   await page.waitForTimeout(150);
   const stopState = await page.evaluate(() => ({ stops: Trading.stops, kinds: Draw.orderLines().map(o => o.kind) }));
@@ -878,6 +911,7 @@ const waitLoaded = page => page.waitForFunction(
     const c = App.engine.current;
     return { h: c.h, l: c.l, tick: Trading.TICK };
   });
+  await giveSetup(page);
   await page.keyboard.press('ArrowUp');
   await page.waitForTimeout(140);
   const upStop = await page.evaluate(() => ({
@@ -891,8 +925,10 @@ const waitLoaded = page => page.waitForFunction(
         `H=${keyStop0.h} +${keyStop0.tick} → ` + JSON.stringify(upStop.stops));
 
   // 覆盖式: 再按两次 ↑, 同方向只应剩最新一张 (不堆叠)
+  await giveSetup(page);
   await page.keyboard.press('ArrowUp');
   await page.waitForTimeout(90);
+  await giveSetup(page);
   await page.keyboard.press('ArrowUp');
   await page.waitForTimeout(140);
   const upStop2 = await page.evaluate(() => ({
@@ -905,6 +941,7 @@ const waitLoaded = page => page.waitForFunction(
         && Math.abs(upStop2.buys[0] - (upStop2.h + keyStop0.tick)) < 1e-9,
         `${upStop2.n} 张 · buy=${JSON.stringify(upStop2.buys)} H=${upStop2.h}`);
 
+  await giveSetup(page);
   await page.keyboard.press('ArrowDown');
   await page.waitForTimeout(140);
   const dnStop = await page.evaluate(() => Trading.stops.map(s => ({ side: s.side, price: s.price })));
@@ -1711,10 +1748,170 @@ const waitLoaded = page => page.waitForFunction(
   await page.click('#tfGroup button[data-tf="5m"]');
   await page.waitForTimeout(600);
 
+  /* 20. 价格行为 setup 打标 / 账本 / 统计 (v1.1) */
+  const load0 = await page.evaluate(() => ({
+    setups: Setups.loaded, n: Setups.list.length, cycles: Setups.cycles.length,
+    groups: Setups.groups.length, journal: Journal.loaded,
+    feel: !!Setups.byId('feel'), top10: Setups.list.filter(s => s.group === 'top10').length,
+  }));
+  check('setup 清单载入 (内置 22+ / 5 组 / 4 周期 / 有「感觉」)',
+        load0.setups && load0.n >= 22 && load0.cycles === 4 && load0.groups >= 5 && load0.feel && load0.top10 === 10,
+        JSON.stringify(load0));
+  check('账本载入', load0.journal);
+
+  // 没选 setup 就下单 → 必须弹窗, 且不能下单
+  await page.evaluate(() => {
+    App.pendingSetup = null; App.pendingCycle = null; App.syncSetupUI();
+    Trading.reset(); App._limits = [];
+  });
+  const posBefore = await page.evaluate(() => Trading.pos);
+  await page.click('#btnBuy');
+  await page.waitForTimeout(250);
+  check('未选 setup 就下单 → 弹窗拦下',
+        (await page.isVisible('#setupModal')) && (await page.evaluate(() => Trading.pos)) === posBefore,
+        'pos=' + await page.evaluate(() => Trading.pos));
+  const chipN = await page.evaluate(() => document.querySelectorAll('#setupList button[data-setup]').length);
+  check('弹窗里按组列出全部 setup', chipN >= 22, chipN + ' 个');
+
+  // 周期没选就点 setup → 仍然不下单 (两个维度都必选)
+  await page.click('#setupList button[data-setup="mtr"]');
+  await page.waitForTimeout(200);
+  check('没选市场周期点 setup → 也不下单',
+        (await page.isVisible('#setupModal')) && (await page.evaluate(() => Trading.pos)) === posBefore);
+
+  // 选周期 + setup → 下单, 两个维度写到这一笔上
+  await page.click('#setupCycleSeg button[data-cycle="tight"]');
+  await page.click('#setupList button[data-setup="h2l2"]');
+  await page.waitForTimeout(300);
+  const opened = await page.evaluate(() => ({
+    pos: Trading.pos, setup: Trading._posSetupId, cycle: Trading._posCycle,
+    pending: App.pendingSetup, panel: document.getElementById('setupPickText').textContent,
+    cycleActive: (document.querySelector('#cycleSeg button.active') || {}).dataset?.cycle,
+    modal: document.getElementById('setupModal').style.display,
+  }));
+  check('选完 setup → 立刻执行这笔下单',
+        opened.pos !== 0 && opened.setup === 'h2l2' && opened.cycle === 'tight' && opened.modal === 'none',
+        JSON.stringify(opened));
+  check('setup 用完即清 (每单都要重新选)', opened.pending === null && opened.panel === '未选择',
+        JSON.stringify({ pending: opened.pending, panel: opened.panel }));
+  check('市场周期留在面板上 (阶段内不常变)', opened.cycleActive === 'tight', opened.cycleActive);
+
+  // 进入下一根 → 锁定初始风险; 之后再挪止损不改分母
+  await page.click('#btnStepFwd');
+  await page.waitForTimeout(250);
+  const lock1 = await page.evaluate(() => ({
+    locked: Trading._riskLocked, risk: Trading.riskPoints, initSl: Trading.initSl, initTp: Trading.initTp,
+  }));
+  check('进入下一根锁定初始风险 (R 的分母)',
+        lock1.locked && lock1.risk > 0 && lock1.initSl != null, JSON.stringify(lock1));
+  await page.evaluate(() => { Trading.sl = Trading.sl - 4; Trading._slMoved = true; Trading.save(); });
+  const lock2 = await page.evaluate(() => Trading.riskPoints);
+  check('锁定后再挪止损不改 R 分母', lock2 === lock1.risk, lock1.risk + ' → ' + lock2);
+
+  // 平仓 → 账本记一笔, R = 点数 ÷ 初始风险
+  await page.click('#btnClose');
+  await page.waitForTimeout(400);
+  const jrec = await page.evaluate(() => {
+    const t = Journal.data.trades.filter(x => x.sessionId === App.sessionId);
+    return t[t.length - 1];
+  });
+  check('平仓后账本自动记一笔 (含 setup / 周期 / R)',
+        !!jrec && jrec.setupId === 'h2l2' && jrec.cycle === 'tight' && jrec.riskPoints > 0
+        && Math.abs(jrec.r - jrec.points / jrec.riskPoints) < 0.01,
+        JSON.stringify(jrec && { setup: jrec.setupName, cycle: jrec.cycle, r: jrec.r,
+          pts: jrec.points, risk: jrec.riskPoints, reason: jrec.exitReason }));
+  check('账本落盘到 data/journal.json', await page.evaluate(async () => {
+    const r = await fetch('/api/journal', { cache: 'no-store' });
+    const d = await r.json();
+    return Array.isArray(d.trades) && d.trades.length > 0;
+  }));
+
+  // 突破挂单: 挂上就带 tp/sl, 拖挂单价 tp/sl 按相对距离跟随
+  const stopGeo = await page.evaluate(() => {
+    Trading.clearStops(); Trading.save();
+    App.pendingSetup = 'mm'; App.pendingCycle = 'broad';
+    const cur = App.engine.current;
+    App._doStopOrderAtBarEdge('buy');
+    const s = Trading.stops[0];
+    const before = { price: s.price, tp: s.tp, sl: s.sl };
+    const np = Math.round((s.price + 2) * 4) / 4;
+    Draw.applyOrderDrag('stop:' + s.id, np);
+    const after = { price: s.price, tp: s.tp, sl: s.sl };
+    const lines = Draw.orderLines().filter(o => String(o.key).indexOf('stop:') === 0).map(o => o.key);
+    return { before, after, lines, setup: s.setupId, cycle: s.cycle, np };
+  });
+  check('挂突破单时机械性挂好 tp/sl (2R)',
+        stopGeo.before.tp != null && stopGeo.before.sl != null && stopGeo.setup === 'mm'
+        && Math.abs((stopGeo.before.tp - stopGeo.before.price) / (stopGeo.before.price - stopGeo.before.sl) - 2) < 0.02,
+        JSON.stringify(stopGeo.before));
+  check('拖挂单价 → tp/sl 按相对距离一起走',
+        Math.abs(stopGeo.after.tp - stopGeo.before.tp - 2) < 1e-9
+        && Math.abs(stopGeo.after.sl - stopGeo.before.sl - 2) < 1e-9,
+        JSON.stringify({ before: stopGeo.before, after: stopGeo.after }));
+  check('待成交的挂单显示三条线 (挂单价 / 止盈 / 止损)',
+        stopGeo.lines.length === 3, JSON.stringify(stopGeo.lines));
+
+  // 持仓中换行情被拦
+  await page.evaluate(() => {
+    App.pendingSetup = 'feel'; App.pendingCycle = 'range';
+    const cur = App.engine.current;
+    Trading.fill('buy', 1, cur.c, 'market', cur.epoch, cur.off,
+                 { bar: cur, prev: App.prevBars(5), setupId: 'feel', cycle: 'range' });
+    App.consumeSetup();
+  });
+  check('持仓中', (await page.evaluate(() => Trading.pos)) !== 0);
+  await page.click('#replayPillBtn');
+  await page.waitForTimeout(250);
+  check('持仓时点「选择随机K线」被拦 (请先平仓)',
+        !(await page.isVisible('#startModal')), (await page.textContent('#toast')));
+  await page.evaluate(() => { Trading.reset(); App._limits = []; });
+
+  // 统计页签
+  await page.click('#sideTabs button[data-tab="stats"]');
+  await page.waitForTimeout(300);
+  const statsUI = await page.evaluate(() => ({
+    shown: document.getElementById('statsPane').style.display !== 'none',
+    listHidden: document.getElementById('tradeList').style.display === 'none',
+    txt: document.getElementById('statsPane').textContent,
+    secs: [...document.querySelectorAll('#statsPane .stats-sec-h b')].map(e => e.textContent),
+    weak: document.querySelectorAll('#statsPane .stats-row.weak').length,
+    tools: document.querySelectorAll('#statsPane .stats-tools button').length,
+  }));
+  check('统计页签切换 (列表隐藏 / 统计显示)', statsUI.shown && statsUI.listHidden);
+  check('统计含 综合 / 按 Setup / 按市场周期',
+        statsUI.secs.includes('综合') && statsUI.secs.includes('按 Setup') && statsUI.secs.includes('按市场周期'),
+        JSON.stringify(statsUI.secs));
+  check('样本不足的组标 *', statsUI.weak > 0 && statsUI.txt.includes('参考价值有限'), statsUI.weak + ' 组');
+  check('统计页有导出/导入入口', statsUI.tools === 4, statsUI.tools + ' 个');
+  const csvHead = await page.evaluate(() => Journal.tradesCSV().split('\r\n')[0]);
+  check('交易 CSV 表头含 Setup / 市场周期 / R',
+        csvHead.includes('Setup') && csvHead.includes('市场周期') && csvHead.includes('R'), csvHead.slice(0, 40));
+  check('CSV 数字不带正号 (Excel 不当文本)',
+        await page.evaluate(() => {
+          const rows = Journal.tradesCSV().split('\r\n').slice(1).filter(Boolean);
+          return rows.every(r => !/,"[+-]\d/.test(r) && !/(^|,)\+\d/.test(r));
+        }));
+  await page.click('#sideTabs button[data-tab="trades"]');
+  await page.waitForTimeout(150);
+  check('切回交易记录页签', await page.evaluate(() =>
+    document.getElementById('statsPane').style.display === 'none'
+    && document.getElementById('tradeList').style.display !== 'none'));
+
+  // 面板宽度没变
+  check('右侧面板宽度仍 288px',
+        (await page.evaluate(() => document.getElementById('sidePanel').getBoundingClientRect().width)) === 288);
+
+  await page.evaluate(() => { Trading.reset(); Draw.clearAll(); App._limits = []; App.pendingSetup = null; });
+
   /* 15. 截图 + 错误汇总 */
   await page.click('#btnRestart');
   await page.waitForTimeout(500);
+  await page.evaluate(() => document.getElementById('toast').classList.remove('show'));
   await page.screenshot({ path: SHOT });
+  await page.evaluate(async (bk) => {
+    await fetch('/api/journal', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bk) });
+  }, journalBackup);
   check('截图保存', true, SHOT);
   check('无 console 错误', errors.length === 0, errors.slice(0, 3).join(' ; '));
 

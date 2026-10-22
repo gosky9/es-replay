@@ -13,6 +13,14 @@ const App = {
   theme: 'light',
   crosshairMagnet: false,
 
+  /* ---- 价格行为打标 (v1.1): 市场周期 × setup ---- */
+  pendingSetup: null,        // 面板上预选的 setup id —— 下单即消费, 每单都要明确选过
+  pendingCycle: null,        // 市场周期 id (记在 localStorage: 一个阶段里不常变)
+  _setupCb: null,            // 弹窗选完之后要执行的那个下单动作
+  _setupTempCycle: null,     // 弹窗里正在选的周期 (点 setup 才落地)
+  _resumeAfterSetup: false,  // 因弹窗而暂停的回放, 关掉弹窗要续上
+  sessionId: null,           // 本次复盘 id; 账本用它区分「本场」和「历史」
+
   async boot() {
     // 主题: 默认浅色 (TradingView 默认), 记住用户选择
     this.theme = localStorage.getItem('es_replay_theme') || 'light';
@@ -23,6 +31,20 @@ const App = {
     Draw.init();
     Trading.load();
     Trading.onChange = () => this.renderTrading();
+
+    /* 本次复盘 id + setup 清单 + 账本 (都会用到, 先就位) */
+    try {
+      this.sessionId = localStorage.getItem('es_replay_session') ||
+        ('S' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
+      localStorage.setItem('es_replay_session', this.sessionId);
+      this.pendingCycle = localStorage.getItem('es_replay_cycle') || null;
+    } catch (e) { this.sessionId = 'S' + Date.now().toString(36); }
+    this.syncSetupUI();
+    try { await Setups.load(); } catch (e) { console.error('setups load failed', e); }
+    this.syncSetupUI(); this.syncManageList();
+    Journal.onChange = () => { this.renderTrading(); this.renderStats(); };
+    try { await Journal.load(); } catch (e) { console.error('journal load failed', e); }
+
     try {
       const meta = await DataLoader.init();
       document.getElementById('dataRangeNote').textContent =
@@ -35,6 +57,7 @@ const App = {
     this.bindUI();
     this.initStartModal();            // 有上次位置时, 弹窗默认选中「继续上次」
     this.renderTrading();
+    this.renderStats();
     this.startClock();
     // 日报索引 (时间轴日期跳转): 后台拉, 拉到就补一帧, 把有日报的日期标记画出来
     if (typeof Reports !== 'undefined') {
@@ -207,11 +230,71 @@ const App = {
     $('btnBuy').addEventListener('click', () => this.placeOrder('buy'));
     $('btnSell').addEventListener('click', () => this.placeOrder('sell'));
     $('btnClose').addEventListener('click', () => this.closePosition());
-    $('btnResetTrades').addEventListener('click', () => { Trading.reset(); ChartMgr.setPosLine(null); this.renderTrading(); this.refreshMarkers(); });
+    $('btnResetTrades').addEventListener('click', () => this.clearSessionTrades());
+
+    /* 市场周期 / setup 打标 */
+    $('cycleSeg').addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      this.setCycle(b.dataset.cycle);
+    });
+    $('setupPick').addEventListener('click', () => this.openSetupModal(null));
+    $('sideTabs').addEventListener('click', e => {
+      const b = e.target.closest('button[data-tab]'); if (!b) return;
+      this.switchTab(b.dataset.tab);
+    });
+
+    /* setup 选择弹窗 */
+    $('setupModalClose').addEventListener('click', () => this.closeSetupModal(false));
+    $('setupCancelBtn').addEventListener('click', () => this.closeSetupModal(false));
+    $('setupCycleSeg').addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      this._setupTempCycle = b.dataset.cycle;
+      this.syncSetupModal();
+    });
+    $('setupList').addEventListener('click', e => {
+      const b = e.target.closest('button[data-setup]'); if (!b) return;
+      this.chooseSetup(b.dataset.setup);
+    });
+    $('setupAddBtn').addEventListener('click', () => this.quickAddSetup());
+    $('setupManageBtn').addEventListener('click', () => this.openManageModal());
+
+    /* setup 管理弹窗 */
+    $('manageModalClose').addEventListener('click', () => this.closeManageModal());
+    $('manageDoneBtn').addEventListener('click', () => this.closeManageModal());
+    $('manageAddBtn').addEventListener('click', () => this.manageAdd());
+    $('manageNewName').addEventListener('keydown', e => { if (e.key === 'Enter') this.manageAdd(); });
+    $('manageList').addEventListener('change', e => {
+      const t = e.target;
+      if (t.dataset.act === 'toggle') { Setups.setActive(t.dataset.id, t.checked); this.syncManageList(); }
+      else if (t.dataset.act === 'group') { Setups.setGroup(t.dataset.id, t.value); this.syncManageList(); }
+      else if (t.dataset.act === 'rename') {
+        if (!Setups.rename(t.dataset.id, t.value)) { this.syncManageList(); }
+        this.syncSetupUI();
+      }
+    });
+
+    /* 账本导出 / 导入 */
+    $('statsPane').addEventListener('click', e => {
+      const b = e.target.closest('button[data-act]'); if (!b) return;
+      this.statsAction(b.dataset.act);
+    });
+    $('journalImport').addEventListener('change', e => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = '';                    // 同一个文件能重复导入
+      if (f) this.importJournal(f);
+    });
 
     /* 键盘 */
     document.addEventListener('keydown', e => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      // setup 弹窗/管理弹窗开着时, 快捷键一律不生效 (B/S/C 会误下单)
+      if ($('setupModal').style.display === 'flex' || $('manageModal').style.display === 'flex') {
+        if (e.key === 'Escape') {
+          if ($('manageModal').style.display === 'flex') this.closeManageModal();
+          else this.closeSetupModal(false);
+        }
+        return;
+      }
       if (e.key === 'Escape') {
         if ($('ctxMenu').style.display === 'block') { $('ctxMenu').style.display = 'none'; return; }
         if ($('helpModal').style.display === 'flex') { $('helpModal').style.display = 'none'; return; }
@@ -474,6 +557,7 @@ const App = {
   /** 打开「选择随机K线」弹窗 (顶栏回放胶囊 / 图例◀◀ / 弹窗下拉 共用) */
   startReplay() {
     const $ = id => document.getElementById(id);
+    if (!this.guardFlat('换一段行情')) return;
     this.initStartModal();
     // 复盘进行中误点进来: 先暂停, 免得在弹窗后面白跑掉几十根
     if (this.engine && this.engine.playing) { this._resumeAfterModal = true; this.engine.pause(); }
@@ -495,6 +579,7 @@ const App = {
   /** 打开「自选日期」弹窗 */
   openCustomPicker() {
     const $ = id => document.getElementById(id);
+    if (!this.guardFlat('换一段行情')) return;
     $('modeSeg').querySelectorAll('button').forEach(x => x.classList.toggle('active', x.dataset.mode === 'custom'));
     this.mode = 'custom';
     $('customDateRow').style.display = '';
@@ -565,8 +650,18 @@ const App = {
   },
 
   /* ---------- 会话生命周期 ---------- */
+  /** 持仓中不允许换行情/清空 —— 否则这一笔的 R 就丢了 */
+  guardFlat(what) {
+    if (Trading.pos !== 0) {
+      this.toast(`当前有持仓, 请先平仓再${what || '继续'}`, true);
+      return false;
+    }
+    return true;
+  },
+
   async startSession() {
     this._resumeAfterModal = false;       // 真的开始新会话了, 不要残留自动续播
+    if (!this.guardFlat('开始新的复盘')) return;
     const meta = DataLoader.meta;
     if (!meta) { this.toast('数据索引未加载完成, 请稍候', true); return; }
     const from = meta.usableFrom ? Math.floor(new Date(meta.usableFrom + 'T00:00:00Z').getTime() / 1000) : meta.range.first;
@@ -604,6 +699,14 @@ const App = {
     this.session = document.getElementById('modalSession').value;
     this.tf = document.getElementById('modalTf').value;
     this.syncTfUI();
+    // 新会话: 换一个场次 id —— 账本按它区分「本场」和「历史」, 历史不会被这一场覆盖
+    this.sessionId = 'S' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+    try { localStorage.setItem('es_replay_session', this.sessionId); } catch (e) { }
+    this._tradeSig = null;
+    // 上一场还没触发的挂单: 记成「未触发」再清掉, 不然它们就凭空消失了
+    if (this.engine && this.engine.current) {
+      Trading.expireStops(this.engine.current.epoch, this.engine.current.off);
+    }
     // 新会话: 重置交易状态(持仓/流水/标记/挂单/止盈止损)
     Trading.reset();
     this._limits = []; Trading._pendingLimits = false;
@@ -755,7 +858,9 @@ const App = {
   /** 结束本次复盘, 回到开始弹窗 */
   closeReplay() {
     if (!this.engine) return;
+    if (!this.guardFlat('结束本次复盘')) return;
     this._resumeAfterModal = false;
+    if (this.engine.current) Trading.expireStops(this.engine.current.epoch, this.engine.current.off);
     this.engine.destroy();
     this.engine = null;
     this.bars = [];
@@ -777,7 +882,14 @@ const App = {
     // 在已加载窗口内找最近的一根; 超出窗口则按新起点重新加载(属于新会话, 重置交易)
     const first = this.bars[0].epoch, last = this.bars[this.bars.length - 1].epoch;
     if (ep < first - 60 || ep > last + 60) {
+      if (!this.guardFlat('跳到其它时段')) return;
       this.targetEpoch = ep;
+      if (this.engine && this.engine.current) {
+        Trading.expireStops(this.engine.current.epoch, this.engine.current.off);
+      }
+      this.sessionId = 'S' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      try { localStorage.setItem('es_replay_session', this.sessionId); } catch (e) { }
+      this._tradeSig = null;
       Trading.reset();
       this._limits = []; Trading._pendingLimits = false;
       ChartMgr.setMarkers([]);
@@ -820,6 +932,18 @@ const App = {
     return e.bars.slice(Math.max(0, e.idx - n), e.idx);
   },
 
+  /** 本场已完成的一笔交易 (账本按 sessionId 切; 一笔交易一行, 不是成交流水) */
+  sessionTrades() {
+    if (typeof Journal === 'undefined' || !Journal.loaded || !this.sessionId) return [];
+    const sid = this.sessionId;
+    return Journal.data.trades.filter(t => t.sessionId === sid);
+  },
+
+  esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  },
+
   renderTrading() {
     const cur = this.engine ? this.engine.current : null;
     const price = cur ? cur.c : 0;
@@ -835,30 +959,207 @@ const App = {
     const tp = Trading.totalPnl(price);
     $('stTotal').textContent = this.ptStr(tp);
     $('stTotal').className = 'stat-v ' + (tp > 0 ? 'up' : tp < 0 ? 'down' : '');
-    const st = Trading.stats();
-    $('stWin').textContent = `${st.n} 笔 / ${st.winRate}`;
+    // 交易/胜率: 换成一笔交易为单位的统计 (成交流水会把一次开平仓算两笔)
+    const mine = this.sessionTrades();
+    const aggS = (typeof Journal !== 'undefined' && Journal.loaded)
+      ? Journal.agg(mine) : { n: 0, winRate: null };
+    $('stWin').textContent = `${aggS.n} 笔 / ${aggS.winRate == null ? '-' : aggS.winRate.toFixed(0) + '%'}`;
     ChartMgr.setPosLine(Trading.pos === 0 ? null : Trading.avg);
     // 交易记录: 内容没变就不重建 DOM (回放每推进一根都会走到这里)
     const list = $('tradeList');
-    $('tradeCount').textContent = `(${Trading.trades.length})`;
-    const lastT = Trading.trades[Trading.trades.length - 1];
-    const sig = Trading.trades.length + '|' + (lastT ? (lastT.time || '') + lastT.side + lastT.qty + lastT.price + lastT.pnl : '');
+    const total = (typeof Journal !== 'undefined' && Journal.loaded) ? Journal.data.trades.length : 0;
+    $('tradeCount').textContent = total > mine.length ? `(${mine.length}/${total})` : `(${mine.length})`;
+    const lastT = mine[mine.length - 1];
+    const sig = mine.length + '|' + (lastT ? lastT.id + '|' + lastT.r : '');
     if (sig !== this._tradeSig) {
       this._tradeSig = sig;
-      if (!Trading.trades.length) {
-        list.innerHTML = '<div class="trade-empty">暂无交易记录</div>';
+      if (!mine.length) {
+        list.innerHTML = '<div class="trade-empty">本场还没有完成的交易<br>' +
+          '<span class="t-none">平仓后自动记一笔</span></div>';
       } else {
-        list.innerHTML = Trading.trades.slice().reverse().map(t => `
-        <div class="trade-item">
-          <span class="t-time">${String(t.time || '').slice(5, 16)}</span>
-          <span class="t-side ${t.side}">${t.side === 'buy' ? '买' : '卖'}${t.qty}</span>
-          <span class="t-price">@${t.price.toFixed(2)}</span>
-          <span class="t-pnl ${t.pnl == null ? '' : t.pnl >= 0 ? 'up' : 'down'}">${t.pnl == null ? '' : this.ptStr(t.pnl)}</span>
-        </div>`).join('');
+        list.innerHTML = mine.slice().reverse().map(t => {
+          const long = t.side === 'long';
+          const rc = t.r == null ? '' : (t.r > 0 ? 'up' : t.r < 0 ? 'down' : '');
+          const rTxt = t.r == null ? '–' : (t.r > 0 ? '+' : '') + t.r.toFixed(2) + 'R';
+          const pTxt = t.points == null ? '' : (t.points > 0 ? '+' : '') + t.points.toFixed(2) + '点';
+          return `<div class="trade-item t-one">
+          <div class="t-top">
+            <span class="t-setup">${this.esc(t.setupName || Setups.name(t.setupId))}</span>
+            <span class="t-side ${long ? 'buy' : 'sell'}">${long ? '多' : '空'}</span>
+          </div>
+          <span class="t-r ${rc}">${rTxt}</span>
+          <div class="t-sub">
+            <span>${String(t.exitTime || '').slice(5, 16)}</span>
+            <span class="t-cyc">${this.esc(Setups.cycleName(t.cycle))}</span>
+            <span>${pTxt}</span>
+          </div>
+        </div>`;
+        }).join('');
       }
       if (list.scrollTop) list.scrollTop = 0;
     }
     if (typeof Draw !== 'undefined' && Draw.render) Draw.render();   // 入场/止盈/止损线跟随持仓
+  },
+
+  /** 清空「本场」的交易记录 (账本其它场次不动) */
+  clearSessionTrades() {
+    if (Trading.pos !== 0) { this.toast('还有持仓, 先平仓再清空', true); return; }
+    const mine = this.sessionTrades();
+    if (!mine.length) { this.toast('本场还没有完成的交易'); return; }
+    const ok = window.confirm(`清空本场 ${mine.length} 笔交易记录？\n账本里其它场次的记录不受影响。`);
+    if (!ok) return;
+    const sid = this.sessionId;
+    Journal.data.trades = Journal.data.trades.filter(t => t.sessionId !== sid);
+    Journal.data.orders = Journal.data.orders.filter(o => o.sessionId !== sid);
+    Journal.save();
+    this.renderTrading(); this.renderStats();
+    this.toast('已清空本场交易记录');
+  },
+
+  /* ================================================================
+     Setup 统计 —— 读的是账本全量 (跨复盘会话), 这才是这个功能的意义
+     ================================================================ */
+  MIN_SAMPLE: 20,          // 样本量低于这个数就标 *, 别拿 3 笔的胜率当结论
+
+  switchTab(tab) {
+    document.querySelectorAll('#sideTabs button').forEach(b =>
+      b.classList.toggle('active', b.dataset.tab === tab));
+    const isStats = tab === 'stats';
+    document.getElementById('tradeList').style.display = isStats ? 'none' : '';
+    document.getElementById('statsPane').style.display = isStats ? '' : 'none';
+    if (isStats) this.renderStats();
+  },
+
+  _statsTools() {
+    return `<div class="stats-tools">
+      <button class="btn-ghost" data-act="csv">导出交易 CSV</button>
+      <button class="btn-ghost" data-act="csvOrders">导出挂单 CSV</button>
+      <button class="btn-ghost" data-act="json">导出 JSON 备份</button>
+      <button class="btn-ghost" data-act="import">导入 JSON</button>
+    </div>`;
+  },
+
+  renderStats() {
+    const box = document.getElementById('statsPane');
+    if (!box) return;
+    if (typeof Journal === 'undefined' || !Journal.loaded) {
+      box.innerHTML = '<div class="stats-empty">账本加载中…</div>';
+      return;
+    }
+    const trades = Journal.data.trades || [];
+    const orders = Journal.data.orders || [];
+    if (!trades.length && !orders.length) {
+      box.innerHTML = '<div class="stats-empty">还没有记录<br>做完一笔交易就会出现在这里</div>' + this._statsTools();
+      return;
+    }
+    const MIN = this.MIN_SAMPLE;
+    const all = Journal.agg(trades);
+    let sumPts = 0;
+    for (const t of trades) sumPts += (t.points || 0);
+
+    const sec = (title, right, body) =>
+      `<div class="stats-sec"><div class="stats-sec-h"><b>${title}</b><span>${right || ''}</span></div>${body}</div>`;
+    const head = '<div class="stats-row head"><span class="s-name">Setup</span>' +
+                 '<span class="s-n">n</span><span class="s-wr">胜率</span><span class="s-r">均R</span></div>';
+    const rowHtml = (name, a, alt, tot) => {
+      const weak = a.rn > 0 && a.rn < MIN;
+      const wr = a.winRate == null ? '–' : a.winRate.toFixed(0) + '%';
+      const avg = a.avgR == null ? '–' : (a.avgR > 0 ? '+' : '') + a.avgR.toFixed(2);
+      const cls = a.avgR == null ? '' : (a.avgR > 0 ? 'up' : a.avgR < 0 ? 'down' : '');
+      return `<div class="stats-row${alt ? ' alt' : ''}${tot ? ' tot' : ''}${weak ? ' weak' : ''}">` +
+        `<span class="s-name" title="${this.esc(name)}">${this.esc(name)}${weak ? '*' : ''}</span>` +
+        `<span class="s-n">${a.n}</span>` +
+        `<span class="s-wr ${cls}">${wr}</span>` +
+        `<span class="s-r ${cls}">${avg}</span></div>`;
+    };
+    const groupBy = keyFn => {
+      const m = new Map();
+      for (const t of trades) {
+        const k = keyFn(t) || '_none';
+        if (!m.has(k)) m.set(k, []);
+        m.get(k).push(t);
+      }
+      return [...m.entries()].map(([k, l]) => ({ k, a: Journal.agg(l) }))
+        .sort((x, y) => y.a.n - x.a.n);
+    };
+    const num = (v, sign) => (v == null ? '–' : (sign && v > 0 ? '+' : '') + v.toFixed(2));
+
+    // 导出/导入放最上面: 统计内容比可视区高, 放末尾会被埋在下面
+    let html = this._statsTools();
+
+    /* 综合 (所有 setup / 所有场次) */
+    html += sec('综合', `全部 ${all.n} 笔`, `
+      <div class="stat-grid">
+        <div class="stat"><span class="stat-k">胜率</span>
+          <span class="stat-v">${all.winRate == null ? '–' : all.winRate.toFixed(0) + '%'}</span></div>
+        <div class="stat"><span class="stat-k">平均 R</span>
+          <span class="stat-v ${all.avgR == null ? '' : all.avgR > 0 ? 'up' : all.avgR < 0 ? 'down' : ''}">${num(all.avgR, true)}</span></div>
+        <div class="stat"><span class="stat-k">总 R</span>
+          <span class="stat-v ${all.totalR == null ? '' : all.totalR > 0 ? 'up' : all.totalR < 0 ? 'down' : ''}">${num(all.totalR, true)}</span></div>
+        <div class="stat"><span class="stat-k">总点数</span>
+          <span class="stat-v ${sumPts > 0 ? 'up' : sumPts < 0 ? 'down' : ''}">${num(sumPts, true)}</span></div>
+      </div>`);
+
+    /* 按 setup */
+    const bySetup = groupBy(t => t.setupId);
+    if (bySetup.length) {
+      html += sec('按 Setup', `${bySetup.length} 种`,
+        head + bySetup.map((r, i) => rowHtml(
+          r.k === '_none' ? '（未标注）' : Setups.name(r.k), r.a, i % 2 === 1)).join('') +
+        rowHtml('全部', all, false, true));
+    }
+
+    /* 按市场周期 */
+    const byCycle = groupBy(t => t.cycle);
+    if (byCycle.length) {
+      html += sec('按市场周期', '', head + byCycle.map((r, i) => rowHtml(
+        r.k === '_none' ? '（未标周期）' : Setups.cycleName(r.k), r.a, i % 2 === 1)).join(''));
+    }
+
+    /* 突破挂单成交率 */
+    if (orders.length) {
+      const os = Journal.orderStats(orders);
+      const byOSetup = new Map();
+      for (const o of orders) {
+        const k = o.setupId || '_none';
+        if (!byOSetup.has(k)) byOSetup.set(k, []);
+        byOSetup.get(k).push(o);
+      }
+      const orows = [...byOSetup.entries()]
+        .map(([k, l]) => ({ k, s: Journal.orderStats(l) }))
+        .sort((x, y) => y.s.total - x.s.total)
+        .map((r, i) => `<div class="stats-row ord${i % 2 === 1 ? ' alt' : ''}">` +
+          `<span class="s-name">${this.esc(r.k === '_none' ? '（未标注）' : Setups.name(r.k))}</span>` +
+          `<span class="s-n">${r.s.total}</span>` +
+          `<span class="s-wr">${r.s.hitRate == null ? '–' : r.s.hitRate.toFixed(0) + '%'}</span></div>`)
+        .join('');
+      const ohead = '<div class="stats-row ord head"><span class="s-name">Setup</span>' +
+        '<span class="s-n">张</span><span class="s-wr">成交率</span></div>';
+      html += sec('突破挂单成交率',
+        `${os.filled}/${os.total} = ${os.hitRate == null ? '–' : os.hitRate.toFixed(0) + '%'}`,
+        ohead + orows);
+    }
+
+    /* 脚注 */
+    html += `<div class="stats-note">* 样本量 &lt; ${MIN} 笔，参考价值有限。<br>` +
+            `R = 盈亏点数 ÷ 初始风险点数（成交后锁定，不重算）。<br>` +
+            `统计口径：全部场次，一笔交易一行。</div>`;
+    box.innerHTML = html;
+  },
+
+  statsAction(act) {
+    if (typeof Journal === 'undefined') return;
+    if (act === 'csv') Journal.exportCSV();
+    else if (act === 'csvOrders') Journal.exportOrdersCSV();
+    else if (act === 'json') Journal.exportJSON();
+    else if (act === 'import') document.getElementById('journalImport').click();
+  },
+
+  async importJournal(file) {
+    const r = await Journal.importJSON(file);
+    if (!r.ok) { this.toast('导入失败: ' + r.err, true); return; }
+    this.renderStats(); this.renderTrading();
+    this.toast(`已合并导入 · 新增 ${r.added} 条 · 账本共 ${r.total} 条`);
   },
 
   refreshMarkers() {
@@ -866,44 +1167,249 @@ const App = {
     if (!Trading.trades.length && ChartMgr.markers.length) ChartMgr.setMarkers([]);
   },
 
+  /* ================================================================
+     价格行为打标: 市场周期 × setup
+     —— 下单前必须明确选过 (没选就弹窗拦), 选完这一单就消费掉, 下一单重新选
+     ================================================================ */
+  setCycle(id) {
+    this.pendingCycle = id || null;
+    try { localStorage.setItem('es_replay_cycle', id || ''); } catch (e) { }
+    this.syncSetupUI();
+    this.syncSetupModal();
+  },
+
+  syncSetupUI() {
+    const $ = id => document.getElementById(id);
+    const txt = $('setupPickText'), btn = $('setupPick');
+    if (txt) txt.textContent = (typeof Setups !== 'undefined' && this.pendingSetup)
+      ? Setups.name(this.pendingSetup) : '未选择';
+    if (btn) btn.classList.toggle('unset', !(this.pendingSetup && this.pendingCycle));
+    const seg = $('cycleSeg');
+    if (seg) seg.querySelectorAll('button').forEach(b =>
+      b.classList.toggle('active', b.dataset.cycle === this.pendingCycle));
+    this.syncSetupModal();
+  },
+
+  /** 弹窗内容: 周期 4 按钮 + 按组排的 setup 列表 */
+  syncSetupModal() {
+    const $ = id => document.getElementById(id);
+    const seg = $('setupCycleSeg');
+    if (seg) seg.querySelectorAll('button').forEach(b =>
+      b.classList.toggle('active', b.dataset.cycle === this._setupTempCycle));
+    const box = $('setupList');
+    if (!box || typeof Setups === 'undefined' || !Setups.loaded) return;
+    const groups = Setups.grouped();
+    if (!groups.length) {
+      box.innerHTML = '<div class="manage-empty">没有可用的 setup · 点下面「+ 新增」加一个</div>';
+      return;
+    }
+    box.innerHTML = groups.map(g => `
+      <div class="setup-group-h">${this.esc(g.group.name)}</div>
+      <div class="setup-grid">${g.items.map(s =>
+        `<button class="setup-chip${s.id === this.pendingSetup ? ' active' : ''}"
+                 data-setup="${s.id}" title="${this.esc(s.name)}">${this.esc(s.name)}</button>`
+      ).join('')}</div>`).join('');
+  },
+
+  /** 打开 setup 弹窗; cb = 选完之后要执行的动作 (下单) */
+  openSetupModal(cb) {
+    const $ = id => document.getElementById(id);
+    this._setupCb = cb || null;
+    this._setupTempCycle = this.pendingCycle;
+    this.syncSetupModal();
+    $('setupModal').style.display = 'flex';
+    // 弹窗期间别让回放继续跑掉几根 K 线
+    if (this.engine && this.engine.playing) { this._resumeAfterSetup = true; this.engine.pause(); }
+  },
+
+  closeSetupModal(run) {
+    const $ = id => document.getElementById(id);
+    $('setupModal').style.display = 'none';
+    $('manageModal').style.display = 'none';
+    if (this._resumeAfterSetup) {
+      this._resumeAfterSetup = false;
+      if (this.engine) this.engine.play();
+    }
+    const cb = this._setupCb; this._setupCb = null;
+    if (run && cb) cb();
+  },
+
+  /** 选中一个 setup: 落地周期 + setup, 关弹窗, 继续执行刚才那笔下单 */
+  chooseSetup(id) {
+    if (!this._setupTempCycle) {
+      this.toast('先选市场周期 (突破 / 窄通道 / 宽通道 / 区间)', true);
+      return;
+    }
+    this.pendingSetup = id;
+    this.pendingCycle = this._setupTempCycle;
+    try { localStorage.setItem('es_replay_cycle', this.pendingCycle); } catch (e) { }
+    this.syncSetupUI();
+    const hadCb = !!this._setupCb;
+    this.closeSetupModal(true);
+    if (!hadCb) this.toast(`已标记: ${Setups.name(id)} · ${Setups.cycleName(this.pendingCycle)}`);
+  },
+
+  /** 只有在 setup + 周期都选过时才放行; 否则弹窗, 选完再执行 */
+  withSetup(cb) {
+    if (this.pendingSetup && this.pendingCycle) { cb(); return; }
+    this.openSetupModal(cb);
+  },
+
+  /** 这一单已经落定 → 清掉 setup (周期留着), 下一单重新选 */
+  consumeSetup() {
+    this.pendingSetup = null;
+    this.syncSetupUI();
+  },
+
+  /** 突破单的机械止盈止损: 前 5 根极值外 1 tick 当止损, 止盈 = 2R */
+  plannedBrackets(side, entryPx, prev) {
+    const tick = Trading.TICK || 0.25;
+    const long = side === 'buy';
+    let sl;
+    if (prev && prev.length) {
+      const lo = Math.min(...prev.map(b => b.l));
+      const hi = Math.max(...prev.map(b => b.h));
+      sl = long ? lo - tick : hi + tick;
+    } else {
+      sl = long ? entryPx - 6 : entryPx + 6;
+    }
+    let risk = Math.abs(entryPx - sl);
+    if (!(risk > 0)) { risk = 6; sl = long ? entryPx - risk : entryPx + risk; }
+    const tp = long ? entryPx + risk * (Trading.TP_R || 2)
+                    : entryPx - risk * (Trading.TP_R || 2);
+    const r2 = v => Math.round(v * 4) / 4;
+    return { tp: r2(tp), sl: r2(sl) };
+  },
+
+  /* ---------- setup 管理 ---------- */
+  /** 「+ 新增」直接进管理弹窗并聚焦输入框 (不用 window.prompt, 也不会被浏览器拦) */
+  quickAddSetup() {
+    this._manageFromOrder = (document.getElementById('setupModal').style.display === 'flex');
+    document.getElementById('setupModal').style.display = 'none';
+    document.getElementById('manageModal').style.display = 'flex';
+    this.syncManageList();
+    setTimeout(() => document.getElementById('manageNewName').focus(), 0);
+  },
+
+  openManageModal() {
+    this._manageFromOrder = (document.getElementById('setupModal').style.display === 'flex');
+    document.getElementById('setupModal').style.display = 'none';
+    document.getElementById('manageModal').style.display = 'flex';
+    this.syncManageList();
+  },
+
+  closeManageModal() {
+    document.getElementById('manageModal').style.display = 'none';
+    // 从下单弹窗进来的: 回到下单弹窗继续选 (下单动作还挂着)
+    if (this._manageFromOrder) {
+      this._manageFromOrder = false;
+      document.getElementById('setupModal').style.display = 'flex';
+    }
+    this.syncSetupModal(); this.syncSetupUI();
+  },
+
+  syncManageList() {
+    const box = document.getElementById('manageList');
+    if (!box || typeof Setups === 'undefined' || !Setups.loaded) return;
+    if (!Setups.list.length) { box.innerHTML = '<div class="manage-empty">还没有 setup</div>'; return; }
+    const groups = Setups.groups.map(g => `<option value="${g.id}">${this.esc(g.name)}</option>`).join('');
+    box.innerHTML = Setups.list.map(s => `
+      <div class="manage-row${s.active ? '' : ' off'}">
+        <input type="text" data-act="rename" data-id="${s.id}" value="${this.esc(s.name)}" maxlength="24">
+        <select data-act="group" data-id="${s.id}">${groups}</select>
+        <label class="manage-on"><input type="checkbox" data-act="toggle" data-id="${s.id}"
+          ${s.active ? 'checked' : ''}>启用</label>
+      </div>`).join('');
+    // 回填下拉 (template 里不好写 selected)
+    box.querySelectorAll('select[data-act="group"]').forEach(sel => {
+      const s = Setups.byId(sel.dataset.id);
+      if (s && sel.value !== s.group) sel.value = s.group;
+      if (s && ![...sel.options].some(o => o.value === s.group)) {
+        const o = document.createElement('option');
+        o.value = s.group; o.textContent = s.group; sel.appendChild(o); sel.value = s.group;
+      }
+    });
+  },
+
+  manageAdd() {
+    const inp = document.getElementById('manageNewName');
+    const id = Setups.add(inp.value, 'other');
+    if (!id) { this.toast('名称不能为空', true); return; }
+    inp.value = '';
+    this.syncManageList(); this.syncSetupModal();
+    this.toast(`已新增: ${Setups.name(id)}`);
+  },
+
   /* ---------- 下单 ---------- */
+  /* 只有「从空仓开新仓」才强制打标; 加仓/减仓都沿用本笔已有的 setup —— 一笔交易一个 setup */
   placeOrder(side) {
     if (!this.engine) { this.toast('请先开始复盘', true); return; }
+    if (Trading.pos !== 0) { this._doPlaceOrder(side); return; }
+    this.withSetup(() => this._doPlaceOrder(side));
+  },
+
+  _doPlaceOrder(side) {
     const cur = this.engine.current;
     const qty = Math.max(1, +document.getElementById('orderQty').value || 1);
+    const wasPos = Trading.pos;
+    const adding = wasPos !== 0 && ((wasPos > 0) === (side === 'buy'));
+    const setupId = adding ? (Trading._posSetupId || null) : this.pendingSetup;
+    const cycle = adding ? (Trading._posCycle || null) : this.pendingCycle;
     if (this.orderType === 'market') {
       Trading.fill(side, qty, cur.c, 'market', cur.epoch, cur.off,
-                   { bar: cur, prev: this.prevBars(Trading.SL_LOOKBACK) });
-      this.toast(`${side === 'buy' ? '买入' : '卖出'} ${qty} 手 @ ${cur.c.toFixed(2)}`);
+                   { bar: cur, prev: this.prevBars(Trading.SL_LOOKBACK), setupId, cycle });
+      this.toast(`${side === 'buy' ? '买入' : '卖出'} ${qty} 手 @ ${cur.c.toFixed(2)} · ` +
+                 (adding ? '加仓' : (wasPos === 0 ? Setups.name(setupId) : '减仓')));
+      if (wasPos === 0) this.consumeSetup();
       this.renderTrading();
       this.addMarker(side, cur.c);
     } else {
       const lp = +document.getElementById('limitPrice').value;
       if (!lp || lp <= 0) { this.toast('请输入有效限价', true); return; }
       if (!this._limits) this._limits = [];
-      this._limits.push({ side, price: lp, qty });
+      this._limits.push({ side, price: lp, qty, setupId, cycle });
       Trading._pendingLimits = true;
       this.toast(`限价${side === 'buy' ? '买入' : '卖出'} ${qty} 手 @ ${lp.toFixed(2)} 已挂单, 等待成交`);
+      if (wasPos === 0) this.consumeSetup();
     }
   },
 
   /* 上/下键: 在当前这根 K 线的上/下沿外一个 tick 挂突破单
      上键 → 最高价 + 1 tick 上破买入 (止损买单); 下键 → 最低价 − 1 tick 下破卖出 (止损卖单)
-     覆盖式: 同一方向只保留最新这一张, 连按不会堆一叠 (多/空各一张可以共存, 当 bracket 用) */
+     覆盖式: 同一方向只保留最新这一张, 连按不会堆一叠 (多/空各一张可以共存, 当 bracket 用)
+     挂单时就把 tp/sl 机械性算好, 之后可以拖; 成交瞬间锁定成这一笔的初始风险 */
   stopOrderAtBarEdge(side) {
     if (!this.engine) { this.toast('请先开始复盘', true); return; }
+    // 持仓中挂的反向单是用来平仓的, 不该再强制打标
+    if (Trading.pos !== 0) { this._doStopOrderAtBarEdge(side); return; }
+    this.withSetup(() => this._doStopOrderAtBarEdge(side));
+  },
+
+  _doStopOrderAtBarEdge(side) {
     const cur = this.engine.current;
     const tick = Trading.TICK || 0.25;
     const qty = Math.max(1, +document.getElementById('orderQty').value || 1);
     const px = side === 'buy' ? cur.h + tick : cur.l - tick;
     const price = Math.round(px * 100) / 100;                 // 去掉浮点毛刺, 保持 0.25 对齐
-    const before = Trading.stops.length;
-    Trading.stops = Trading.stops.filter(s => s.side !== side);   // 覆盖同方向旧单
-    const replaced = before - Trading.stops.length;
-    Trading.placeStop(side, qty, price);
+    const br = this.plannedBrackets(side, price, this.prevBars(Trading.SL_LOOKBACK));
+    // 覆盖同方向旧单 (存活过的先记成撤销)
+    const gone = Trading.stops.filter(s => s.side === side);
+    Trading.stops = Trading.stops.filter(s => s.side !== side);
+    if (gone.length) Trading._logOrders(gone, 'cancelled', cur.epoch, cur.off);
+    const flat = Trading.pos === 0;
+    Trading.placeStop(side, qty, price, {
+      tp: br.tp, sl: br.sl,
+      setupId: flat ? this.pendingSetup : (Trading._posSetupId || null),
+      cycle: flat ? this.pendingCycle : (Trading._posCycle || null),
+      placeEpoch: cur.epoch, placeTf: this.tf, placeTime: etTimeStr(cur.epoch, cur.off),
+    });
+    const replaced = gone.length;
     Draw.render();
     this.toast(`${side === 'buy' ? '上破' : '下破'} ${price.toFixed(2)} 挂突破${side === 'buy' ? '买' : '卖'} ${qty} 手` +
-               (replaced ? ` (已替换旧的 ${replaced} 张)` : '') + ' · 拖动该线可改价');
+               ` · ${Setups.name(flat ? this.pendingSetup : Trading._posSetupId)}` +
+               ` · 止损 ${br.sl.toFixed(2)} 止盈 ${br.tp.toFixed(2)}` +
+               (replaced ? ` (已替换旧的 ${replaced} 张)` : '') + ' · 三条线都可拖');
+    if (flat) this.consumeSetup();
   },
 
   addMarker(side, price) {
@@ -932,7 +1438,8 @@ const App = {
       if (o.side === 'sell' && bar.h >= o.price) filled = true;
       if (filled) {
         Trading.fill(o.side, o.qty, o.price, 'limit', bar.epoch, bar.off,
-                     { bar, prev: this.prevBars(Trading.SL_LOOKBACK) });
+                     { bar, prev: this.prevBars(Trading.SL_LOOKBACK),
+                       setupId: o.setupId, cycle: o.cycle });
         this.toast(`限价成交: ${o.side === 'buy' ? '买入' : '卖出'} ${o.qty} 手 @ ${o.price.toFixed(2)}`);
         this.addMarker(o.side, o.price);
       } else remain.push(o);
@@ -950,11 +1457,14 @@ const App = {
       if (ev.type === 'fill') {
         this.toast(`突破${ev.side === 'buy' ? '买入' : '卖出'}成交 ${ev.qty} 手 @ ${ev.price.toFixed(2)}`);
         this.addMarker(ev.side, ev.price);
+      } else if (ev.type === 'risk_locked') {
+        // 初始风险锁定: 从这一刻起 R 的分母定了, 之后再挪止损/加仓都不改
+        if (ev.risk != null) this.toast(`初始风险已锁定: ${ev.risk.toFixed(2)} 点 (R 的分母)`);
       } else if (ev.type === 'tp_extend') {
         // 开仓后第一根就扫到 2R → 2R 太近, 止盈改挂到入场K线另一侧
         this.toast(`2R 太近(下一根就扫到), 止盈已改挂到入场K线另一侧 ${ev.price.toFixed(2)}`);
       } else {
-        const isTp = ev.kind === 'tp';
+        const isTp = ev.kind === 'tp' || ev.kind === 'tp_extend';
         this.toast(`${isTp ? '止盈' : '止损'}触发 @ ${ev.price.toFixed(2)} · 已平仓`);
         this.addMarker(ev.side, ev.price);
       }
@@ -994,23 +1504,43 @@ const App = {
   onContextAction(act) {
     const $ = id => document.getElementById(id);
     $('ctxMenu').style.display = 'none';
-    const qty = Math.max(1, +$('orderQty').value || 1);
     const p = this._ctxPrice;
     if (act === 'buyStop' || act === 'sellStop') {
       const side = act === 'buyStop' ? 'buy' : 'sell';
-      Trading.placeStop(side, qty, p);
-      Draw.render();
-      this.toast(`${side === 'buy' ? '上破' : '下破'} ${p.toFixed(2)} 挂突破${side === 'buy' ? '买' : '卖'} ${qty} 手 · 拖动该线可改价`);
+      if (Trading.pos !== 0) this._doStopOrderAtPrice(side, p);
+      else this.withSetup(() => this._doStopOrderAtPrice(side, p));
     } else if (act === 'close') {
       this.closePosition();
     } else if (act === 'clearStops') {
-      const n = Trading.clearStops();
+      const cur = this.engine ? this.engine.current : null;
+      const n = Trading.clearStops(cur ? cur.epoch : null, cur ? cur.off : null);
       Draw.render();
       this.toast(n ? `已撤销 ${n} 张挂单` : '当前没有挂单');
     } else if (act === 'clearBrackets') {
-      Trading.tp = null; Trading.sl = null; Trading.save(); Draw.render();
+      Trading.tp = null; Trading.sl = null;
+      Trading._tpMoved = true; Trading._slMoved = true;
+      Trading.save(); Draw.render();
       this.toast('已清除止盈止损');
     }
+  },
+
+  /** 右键菜单里点的那个价位挂突破单 (同样先挂好 tp/sl) */
+  _doStopOrderAtPrice(side, price) {
+    const cur = this.engine.current;
+    const qty = Math.max(1, +document.getElementById('orderQty').value || 1);
+    const br = this.plannedBrackets(side, price, this.prevBars(Trading.SL_LOOKBACK));
+    const flat = Trading.pos === 0;
+    Trading.placeStop(side, qty, price, {
+      tp: br.tp, sl: br.sl,
+      setupId: flat ? this.pendingSetup : (Trading._posSetupId || null),
+      cycle: flat ? this.pendingCycle : (Trading._posCycle || null),
+      placeEpoch: cur.epoch, placeTf: this.tf, placeTime: etTimeStr(cur.epoch, cur.off),
+    });
+    Draw.render();
+    this.toast(`${side === 'buy' ? '上破' : '下破'} ${price.toFixed(2)} 挂突破${side === 'buy' ? '买' : '卖'} ${qty} 手` +
+               ` · ${Setups.name(flat ? this.pendingSetup : Trading._posSetupId)}` +
+               ` · 止损 ${br.sl.toFixed(2)} 止盈 ${br.tp.toFixed(2)}`);
+    if (flat) this.consumeSetup();
   },
 
   closePosition() {

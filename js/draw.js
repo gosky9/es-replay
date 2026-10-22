@@ -944,12 +944,23 @@ const Draw = {
     const out = [];
     if (typeof Trading === 'undefined') return out;
     const mult = Trading.MULT || 50, pos = Trading.pos;
-    // 突破挂单: 每张单一条线 + 一个右侧牌子 (买=蓝 / 卖=红)
+    // 突破挂单: 每张单一条线 + 右侧牌子 (买=蓝 / 卖=红)
+    // 挂单时已经机械性算好 tp/sl (App.plannedBrackets), 所以三条线一起显示, 三条都能拖
     for (const s of (Trading.stops || [])) {
+      const buy = s.side === 'buy';
+      const dir = p => (buy ? p - s.price : s.price - p);   // 相对挂单价的点数
       out.push({
         key: 'stop:' + s.id, price: s.price, kind: 'stop', qty: s.qty,
-        color: s.side === 'buy' ? '#2962ff' : '#f23645',
-        label: s.side === 'buy' ? '突破买' : '突破卖', pts: null, solid: true,
+        color: buy ? '#2962ff' : '#f23645',
+        label: buy ? '突破买' : '突破卖', pts: null, solid: true,
+      });
+      if (s.tp != null) out.push({
+        key: 'stop:' + s.id + ':tp', price: s.tp, kind: 'tp', qty: s.qty,
+        color: '#089981', label: '', pts: dir(s.tp), solid: false,
+      });
+      if (s.sl != null) out.push({
+        key: 'stop:' + s.id + ':sl', price: s.sl, kind: 'sl', qty: s.qty,
+        color: '#ff9800', label: '', pts: dir(s.sl), solid: false,
       });
     }
     if (pos !== 0) {
@@ -1021,20 +1032,33 @@ const Draw = {
   closeOrderLine(key) {
     if (typeof Trading === 'undefined' || !key) return false;
     if (key.indexOf('stop:') === 0) {
-      const id = +key.slice(5);
-      const n0 = Trading.stops.length;
-      Trading.stops = Trading.stops.filter(s => s.id !== id);
-      Trading.save(); this.render();
-      if (typeof App !== 'undefined') App.toast(n0 > Trading.stops.length ? '已撤销这张挂单' : '挂单已不存在');
-      return true;
+      const parts = key.split(':');
+      const id = +parts[1];
+      // 挂单上的 tp/sl 单独一条: 只清这一项, 挂单本身还在
+      if (parts[2]) {
+        const s = (Trading.stops || []).find(s => s.id === id);
+        if (!s) return false;
+        if (parts[2] === 'tp') s.tp = null; else s.sl = null;
+        Trading.save(); this.render();
+        if (typeof App !== 'undefined') {
+          App.toast(`已取消这张挂单的${parts[2] === 'tp' ? '止盈' : '止损'}`);
+        }
+        return true;
+      }
+      // 撤销挂单要进账本 (存活 ≥1 根的才算挂过)
+      const cur = (typeof App !== 'undefined' && App.engine) ? App.engine.current : null;
+      const n = Trading.removeStops([id], cur ? cur.epoch : null, cur ? cur.off : null);
+      this.render();
+      if (typeof App !== 'undefined') App.toast(n ? '已撤销这张挂单' : '挂单已不存在');
+      return n > 0;
     }
     if (key === 'tp') {
-      Trading.tp = null; Trading.save(); this.render();
+      Trading.tp = null; Trading._tpMoved = true; Trading.save(); this.render();
       if (typeof App !== 'undefined') App.toast('已取消止盈 (只保留止损)');
       return true;
     }
     if (key === 'sl') {
-      Trading.sl = null; Trading.save(); this.render();
+      Trading.sl = null; Trading._slMoved = true; Trading.save(); this.render();
       if (typeof App !== 'undefined') App.toast('已取消止损 (只保留止盈)');
       return true;
     }
@@ -1049,11 +1073,20 @@ const Draw = {
   applyOrderDrag(key, price) {
     price = Math.round(price * 4) / 4;                 // 对齐 0.25 tick
     if (key.indexOf('stop:') === 0) {
-      const id = +key.slice(5);
+      const parts = key.split(':');
+      const id = +parts[1];
       const s = (Trading.stops || []).find(s => s.id === id);
-      if (s) s.price = price;
-    } else if (key === 'tp') Trading.tp = price;
-    else if (key === 'sl') Trading.sl = price;
+      if (!s) return;
+      if (parts[2] === 'tp') { s.tp = price; return; }
+      if (parts[2] === 'sl') { s.sl = price; return; }
+      // 拖挂单价: 止盈止损按相对距离一起走 (用户 2026-10-23 要求)
+      const d = price - s.price;
+      s.price = price;
+      const mv = v => Math.round((v + d) * 4) / 4;
+      if (s.tp != null) s.tp = mv(s.tp);
+      if (s.sl != null) s.sl = mv(s.sl);
+    } else if (key === 'tp') { Trading.tp = price; Trading._tpMoved = true; }
+    else if (key === 'sl') { Trading.sl = price; Trading._slMoved = true; }
   },
 
   _axisWidth() {

@@ -4,9 +4,12 @@
 - 仅绑定 127.0.0.1(不对外)
 - 全部响应禁缓存(no-store), 数据/代码改动即时生效
 - GET  /__ping    探活(启动器用它判断"是不是已经有一个在跑了")
+- GET  /api/journal  读交易账本(data/journal.json)
+- POST /api/journal  写交易账本(原子写: 临时文件 + rename, 断电不会写一半)
 - POST /__shutdown 停止服务(页面"退出"按钮 / 停止.vbs 调用)
 - 日志落盘 server.log; 实际端口写入 port.txt 供启动器读取
 """
+import json
 import os
 import socket
 import threading
@@ -15,6 +18,8 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 LOG = open(os.path.join(BASE, 'server.log'), 'a', encoding='utf-8', buffering=1)
+JOURNAL = os.path.join(BASE, 'data', 'journal.json')
+EMPTY_JOURNAL = {'version': 1, 'trades': [], 'orders': []}
 
 
 class Server(ThreadingHTTPServer):
@@ -55,11 +60,47 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path.split('?')[0] == '/__ping':
             self._plain(b'ok')          # 探活: 启动器据此复用已在跑的服务
             return
+        if self.path.split('?')[0] == '/api/journal':
+            self._journal_get()
+            return
         super().do_GET()
+
+    def _journal_get(self):
+        try:
+            with open(JOURNAL, 'r', encoding='utf-8') as f:
+                body = f.read().encode('utf-8')
+        except Exception:
+            body = json.dumps(EMPTY_JOURNAL, ensure_ascii=False).encode('utf-8')
+        self._plain(body, 'application/json; charset=utf-8')
+
+    def _journal_post(self):
+        try:
+            n = int(self.headers.get('Content-Length') or 0)
+            raw = self.rfile.read(n) if n else b''
+            obj = json.loads(raw.decode('utf-8'))
+            if not isinstance(obj, dict):
+                raise ValueError('not an object')
+        except Exception as e:
+            self.send_error(400, 'bad journal: %s' % e)
+            return
+        try:
+            os.makedirs(os.path.dirname(JOURNAL), exist_ok=True)
+            tmp = JOURNAL + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(obj, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, JOURNAL)          # 原子替换: 断电不会留下半个文件
+            self._plain(b'{"ok":true}', 'application/json')
+        except Exception as e:
+            LOG.write('journal write failed: %s\n' % e)
+            self.send_error(500, 'write failed')
 
     def do_POST(self):
         path = self.path.split('?')[0]
-        if path == '/__shutdown':
+        if path == '/api/journal':
+            self._journal_post()
+        elif path == '/__shutdown':
             self._plain(b'{"ok":true}', 'application/json')
             LOG.write('shutdown requested\n')
             threading.Thread(target=self.server.shutdown, daemon=True).start()
