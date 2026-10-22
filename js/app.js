@@ -256,8 +256,15 @@ const App = {
       this.syncSetupModal();
     });
     $('setupList').addEventListener('click', e => {
-      const b = e.target.closest('button[data-setup]'); if (!b) return;
+      // 先看是不是点了 × —— 那是「从本周期移出」, 不是选它
+      const rm = e.target.closest('[data-rm]');
+      if (rm) { e.stopPropagation(); this.removeSetupFromCycle(rm.dataset.rm); return; }
+      const b = e.target.closest('[data-setup]'); if (!b) return;
       this.chooseSetup(b.dataset.setup);
+    });
+    $('setupLib').addEventListener('click', e => {
+      const b = e.target.closest('[data-lib]'); if (!b || b.disabled) return;
+      this.addSetupToCycle(b.dataset.lib);
     });
     $('setupAddBtn').addEventListener('click', () => this.quickAddSetup());
     $('setupManageBtn').addEventListener('click', () => this.openManageModal());
@@ -267,14 +274,42 @@ const App = {
     $('manageDoneBtn').addEventListener('click', () => this.closeManageModal());
     $('manageAddBtn').addEventListener('click', () => this.manageAdd());
     $('manageNewName').addEventListener('keydown', e => { if (e.key === 'Enter') this.manageAdd(); });
+    $('manageGroupAdd').addEventListener('click', () => this.manageAddGroup());
+    $('manageGroupName').addEventListener('keydown', e => { if (e.key === 'Enter') this.manageAddGroup(); });
     $('manageList').addEventListener('change', e => {
       const t = e.target;
       if (t.dataset.act === 'toggle') { Setups.setActive(t.dataset.id, t.checked); this.syncManageList(); }
-      else if (t.dataset.act === 'group') { Setups.setGroup(t.dataset.id, t.value); this.syncManageList(); }
-      else if (t.dataset.act === 'rename') {
+      else if (t.dataset.act === 'group') {
+        Setups.setGroup(t.dataset.id, t.value); this.syncManageList(); this.syncSetupModal();
+      } else if (t.dataset.act === 'cycle') {
+        // 适用周期: 勾上就进那个周期的清单, 取消就移出 (setup 本身不动)
+        if (t.checked) Setups.addToCycle(t.dataset.id, t.dataset.cycle);
+        else Setups.removeFromCycle(t.dataset.id, t.dataset.cycle);
+        this.syncSetupModal();
+      } else if (t.dataset.act === 'rename') {
         if (!Setups.rename(t.dataset.id, t.value)) { this.syncManageList(); }
         this.syncSetupUI();
       }
+    });
+    /* 分组管理: 改名 (change) / 删除 (click) */
+    $('manageGroupRows').addEventListener('change', e => {
+      const t = e.target;
+      if (t.dataset.gact !== 'grename') return;
+      if (!Setups.renameGroup(t.dataset.gid, t.value)) { this.syncManageList(); return; }
+      this.syncManageList(); this.syncSetupModal();
+    });
+    $('manageGroupRows').addEventListener('click', e => {
+      const b = e.target.closest('[data-gdel]'); if (!b) return;
+      const g = Setups.groups.find(x => x.id === b.dataset.gdel);
+      if (!g) return;
+      const n = Setups.list.filter(s => s.group === g.id).length;
+      const msg = n
+        ? `删除分组「${g.name}」？\n\n组里 ${n} 个 setup 不会删，会落到「未分组」等重新归位。`
+        : `删除分组「${g.name}」？`;
+      if (!window.confirm(msg)) return;
+      const moved = Setups.removeGroup(g.id);
+      this.syncManageList(); this.syncSetupModal();
+      this.toast(moved ? `已删除分组, ${moved} 个 setup 移到「未分组」` : '已删除分组');
     });
 
     /* 账本导出 / 导入 */
@@ -727,9 +762,13 @@ const App = {
     this._limits = []; Trading._pendingLimits = false;
     ChartMgr.setMarkers([]);
     await this.loadAndBuild(true);
-    // 继续上次: 窗口建好后 seek 回上次看到的那一根 (onTick 会带出对应的视窗)
+    // 继续上次: 窗口建好后 seek 回上次看到的那一根
     if (this._resumeIdx != null && this.engine) {
       this.engine.seek(Math.min(this._resumeIdx, this.bars.length - 1));
+      // seek 只重设数据, 视窗仍是 loadAndBuild 里 fit:'recent' 算的那一版 ——
+      // 数据长度变了而视窗没跟着走, K 线就会整块挤到右边(用户 2026-10-23 报)。
+      // 这里按当前末端重算一次, 让"看到的那一根"落在横向 2/3 处, 跟正常开始一致。
+      ChartMgr.fitRecent();
       this._resumeIdx = null;
     }
     this.savePos();
@@ -1205,25 +1244,76 @@ const App = {
     this.syncSetupModal();
   },
 
-  /** 弹窗内容: 周期 4 按钮 + 按组排的 setup 列表 */
+  /** 弹窗内容: 周期 4 按钮 + 左(全局参考库) / 右(当前周期在用)
+   *
+   *  用户 2026-10-23 定: 4 个市场周期的入场不一样, 每个周期只列自己会用的。
+   *  左 = 全库(点一下就加进右), 右 = 当前周期的清单(点选它下单 / 点 × 移出本周期)。 */
   syncSetupModal() {
     const $ = id => document.getElementById(id);
     const seg = $('setupCycleSeg');
     if (seg) seg.querySelectorAll('button').forEach(b =>
       b.classList.toggle('active', b.dataset.cycle === this._setupTempCycle));
+
+    const cur = this._setupTempCycle;
+    const libBox = $('setupLib');
     const box = $('setupList');
     if (!box || typeof Setups === 'undefined' || !Setups.loaded) return;
-    const groups = Setups.grouped();
+
+    const curName = $('setupCurName');
+    if (curName) curName.textContent = cur ? Setups.cycleName(cur) : '先选周期';
+
+    /* 左栏: 全库按组列; 已经在当前周期的打勾灰显, 点不动 */
+    if (libBox) {
+      const all = Setups.grouped();
+      libBox.innerHTML = !all.length
+        ? '<div class="manage-empty">库里还没有 setup</div>'
+        : all.map(g => `
+          <div class="setup-group-h">${this.esc(g.group.name)}</div>
+          <div class="setup-grid">${g.items.map(s => {
+            const on = !!cur && Setups.inCycle(s.id, cur);
+            return `<button class="setup-chip lib${on ? ' in' : ''}" data-lib="${s.id}"
+              title="${this.esc(on ? '已在本周期清单里' : '点一下加进右边')}"
+              ${on ? 'disabled' : ''}><span class="nm">${this.esc(s.name)}</span>${
+              on ? '<span class="ck">✓</span>' : ''}</button>`;
+          }).join('')}</div>`).join('');
+    }
+
+    /* 右栏: 当前周期的清单 */
+    if (!cur) {
+      box.innerHTML = '<div class="manage-empty">先在上面选一个市场周期</div>';
+      return;
+    }
+    const groups = Setups.groupedFor(cur);
     if (!groups.length) {
-      box.innerHTML = '<div class="manage-empty">没有可用的 setup · 点下面「+ 新增」加一个</div>';
+      box.innerHTML = '<div class="manage-empty">这个周期还没有 setup<br>从左边点一个加进来</div>';
       return;
     }
     box.innerHTML = groups.map(g => `
       <div class="setup-group-h">${this.esc(g.group.name)}</div>
-      <div class="setup-grid">${g.items.map(s =>
-        `<button class="setup-chip${s.id === this.pendingSetup ? ' active' : ''}"
-                 data-setup="${s.id}" title="${this.esc(s.name)}">${this.esc(s.name)}</button>`
-      ).join('')}</div>`).join('');
+      <div class="setup-grid">${g.items.map(s => `
+        <div class="setup-chip pick${s.id === this.pendingSetup ? ' active' : ''}" data-setup="${s.id}">
+          <span class="nm" title="${this.esc(s.name)}">${this.esc(s.name)}</span>
+          <button class="rm" data-rm="${s.id}" title="从本周期移出（不删库）">×</button>
+        </div>`).join('')}</div>`).join('');
+  },
+
+  /** 左栏点一下 → 加进当前周期 */
+  addSetupToCycle(id) {
+    const cur = this._setupTempCycle;
+    if (!cur) { this.toast('先选市场周期', true); return; }
+    if (!Setups.addToCycle(id, cur)) { this.toast('这个 setup 已经在本周期里了'); return; }
+    this.syncSetupModal();
+    this.toast(`已加进「${Setups.cycleName(cur)}」: ${Setups.name(id)}`);
+  },
+
+  /** 右栏点 × → 只从当前周期移出, setup 本身还在库里 */
+  removeSetupFromCycle(id) {
+    const cur = this._setupTempCycle;
+    if (!cur) return;
+    if (!Setups.removeFromCycle(id, cur)) return;
+    if (this.pendingSetup === id) this.consumeSetup();
+    this.syncSetupModal();
+    this.toast(`已从「${Setups.cycleName(cur)}」移出（库里还留着）`);
   },
 
   /** 打开 setup 弹窗; cb = 选完之后要执行的动作 (下单) */
@@ -1300,6 +1390,8 @@ const App = {
   /** 「+ 新增」直接进管理弹窗并聚焦输入框 (不用 window.prompt, 也不会被浏览器拦) */
   quickAddSetup() {
     this._manageFromOrder = (document.getElementById('setupModal').style.display === 'flex');
+    // 新增的 setup 只勾给"当前正在看/正在用的那个周期"
+    this._manageCycle = this._setupTempCycle || this.pendingCycle || null;
     document.getElementById('setupModal').style.display = 'none';
     document.getElementById('manageModal').style.display = 'flex';
     this.syncManageList();
@@ -1308,6 +1400,7 @@ const App = {
 
   openManageModal() {
     this._manageFromOrder = (document.getElementById('setupModal').style.display === 'flex');
+    this._manageCycle = this._setupTempCycle || this.pendingCycle || null;
     document.getElementById('setupModal').style.display = 'none';
     document.getElementById('manageModal').style.display = 'flex';
     this.syncManageList();
@@ -1326,33 +1419,79 @@ const App = {
   syncManageList() {
     const box = document.getElementById('manageList');
     if (!box || typeof Setups === 'undefined' || !Setups.loaded) return;
+
+    /* 分组管理: 改名 / 删除 (删组不删 setup) */
+    const gbox = document.getElementById('manageGroupRows');
+    if (gbox) {
+      gbox.innerHTML = Setups.groups.length
+        ? Setups.groups.map(g => `
+          <div class="mgrow">
+            <input type="text" data-gact="grename" data-gid="${g.id}"
+                   value="${this.esc(g.name)}" maxlength="16">
+            <button class="mgdel" data-gdel="${g.id}" title="删除这个分组（组里的 setup 不删，会落到「未分组」）">×</button>
+          </div>`).join('')
+        : '<div class="manage-empty">还没有分组</div>';
+    }
+
     if (!Setups.list.length) { box.innerHTML = '<div class="manage-empty">还没有 setup</div>'; return; }
-    const groups = Setups.groups.map(g => `<option value="${g.id}">${this.esc(g.name)}</option>`).join('');
+    const groups = Setups.groups.map(g =>
+      `<option value="${g.id}">${this.esc(g.name)}</option>`).join('');
     box.innerHTML = Setups.list.map(s => `
       <div class="manage-row${s.active ? '' : ' off'}">
         <input type="text" data-act="rename" data-id="${s.id}" value="${this.esc(s.name)}" maxlength="24">
         <select data-act="group" data-id="${s.id}">${groups}</select>
         <label class="manage-on"><input type="checkbox" data-act="toggle" data-id="${s.id}"
           ${s.active ? 'checked' : ''}>启用</label>
+        <div class="manage-cyc"><em>周期</em>${Setups.cycles.map(c => `
+          <label><input type="checkbox" data-act="cycle" data-id="${s.id}" data-cycle="${c.id}"
+            ${(s.cycles || []).includes(c.id) ? 'checked' : ''}>${this.esc(c.name)}</label>`).join('')}</div>
       </div>`).join('');
+
     // 回填下拉 (template 里不好写 selected)
     box.querySelectorAll('select[data-act="group"]').forEach(sel => {
       const s = Setups.byId(sel.dataset.id);
       if (s && sel.value !== s.group) sel.value = s.group;
       if (s && ![...sel.options].some(o => o.value === s.group)) {
         const o = document.createElement('option');
-        o.value = s.group; o.textContent = s.group; sel.appendChild(o); sel.value = s.group;
+        o.value = s.group; o.textContent = s.group === '_nogroup' ? '未分组' : s.group;
+        sel.appendChild(o); sel.value = s.group;
       }
     });
+
+    // 新增区: 分组下拉跟着组列表走
+    const gsel = document.getElementById('manageNewGroup');
+    if (gsel) {
+      const keep = gsel.value;
+      gsel.innerHTML = Setups.groups.map(g =>
+        `<option value="${g.id}">${this.esc(g.name)}</option>`).join('');
+      if (keep && [...gsel.options].some(o => o.value === keep)) gsel.value = keep;
+    }
   },
 
+  /** 管理弹窗里新增 setup: 同时进全局库, 只勾给「进弹窗时选中的那个周期」
+   *  (用户 2026-10-23 定) */
   manageAdd() {
     const inp = document.getElementById('manageNewName');
-    const id = Setups.add(inp.value, 'other');
+    const gsel = document.getElementById('manageNewGroup');
+    const group = (gsel && gsel.value) || (Setups.groups[0] && Setups.groups[0].id) || 'other';
+    const cyc = this._manageCycle || this.pendingCycle || null;
+    const id = Setups.add(inp.value, group, cyc);
     if (!id) { this.toast('名称不能为空', true); return; }
     inp.value = '';
     this.syncManageList(); this.syncSetupModal();
-    this.toast(`已新增: ${Setups.name(id)}`);
+    this.toast(cyc
+      ? `已新增: ${Setups.name(id)} · 只勾给「${Setups.cycleName(cyc)}」`
+      : `已新增: ${Setups.name(id)}（还没归到任何周期）`);
+  },
+
+  manageAddGroup() {
+    const inp = document.getElementById('manageGroupName');
+    if (!inp) return;
+    const id = Setups.addGroup(inp.value);
+    if (!id) { this.toast('分组名不能为空或重复', true); return; }
+    inp.value = '';
+    this.syncManageList(); this.syncSetupModal();
+    this.toast('已新增分组: ' + Setups.groups.find(g => g.id === id).name);
   },
 
   /* ---------- 下单 ---------- */

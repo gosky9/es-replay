@@ -451,7 +451,16 @@
         <button data-cycle="range">区间</button>
       </div>
     </div>
-    <div class="setup-list" id="setupList"></div>
+    <div class="setup-cols">
+      <div class="setup-col">
+        <div class="setup-col-h">全局参考库<span>点一下加进右边</span></div>
+        <div class="setup-list" id="setupLib"></div>
+      </div>
+      <div class="setup-col cur">
+        <div class="setup-col-h">本周期在用<b id="setupCurName">先选周期</b></div>
+        <div class="setup-list" id="setupList"></div>
+      </div>
+    </div>
     <div class="setup-foot">
       <button id="setupAddBtn" class="btn-ghost">+ 新增</button>
       <button id="setupManageBtn" class="btn-ghost">管理</button>
@@ -460,14 +469,26 @@
   </div>
 </div>
 
-<!-- ============ Setup 管理弹窗 (改名 / 新增 / 停用) ============ -->
+<!-- ============ Setup 管理弹窗 (改名 / 分组 / 适用周期 / 停用) ============ -->
 <div id="manageModal" class="modal-mask" style="display:none;">
   <div class="modal manage-modal">
     <button class="modal-x" id="manageModalClose" title="关闭">✕</button>
     <div class="modal-title">管理 Setup</div>
-    <div class="modal-sub">改名不影响历史统计（按 id 聚合）；停用的不出现在下单列表里，历史仍保留</div>
+    <div class="modal-sub">改名不影响历史统计（按 id 聚合）；停用的不出现在下单列表里，历史仍保留；
+      「适用周期」决定它出现在哪几个周期的清单里（可多选）</div>
+
+    <div class="manage-groups">
+      <div class="setup-group-h">分组 <span>改名 / 删除 · 删组不删 setup</span></div>
+      <div class="mgrows" id="manageGroupRows"></div>
+      <div class="manage-add">
+        <input id="manageGroupName" type="text" placeholder="新分组名" maxlength="16">
+        <button id="manageGroupAdd" class="btn-ghost">+ 加组</button>
+      </div>
+    </div>
+
     <div class="manage-add">
       <input id="manageNewName" type="text" placeholder="新 setup 名称" maxlength="24">
+      <select id="manageNewGroup" title="归到哪个分组"></select>
       <button id="manageAddBtn" class="btn-ghost">添加</button>
     </div>
     <div class="manage-list" id="manageList"></div>

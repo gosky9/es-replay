@@ -27,7 +27,8 @@ const Setups = {
         cycles: [{ id: 'breakout', name: '突破' }, { id: 'tight', name: '窄通道' },
                  { id: 'broad', name: '宽通道' }, { id: 'range', name: '区间' }],
         groups: [{ id: 'other', name: '其他' }],
-        setups: [{ id: 'feel', name: '感觉', group: 'other' }],
+        setups: [{ id: 'feel', name: '感觉', group: 'other',
+                   cycles: ['breakout', 'tight', 'broad', 'range'] }],
       };
     }
     try { this.over = JSON.parse(localStorage.getItem(this.DB) || 'null'); } catch (e) { this.over = null; }
@@ -37,13 +38,29 @@ const Setups = {
 
   rebuild() {
     const b = this.base || {};
+    const ov = this.over || {};
     this.cycles = b.cycles || [];
-    this.groups = (b.groups || []).slice();
+
+    /* 组: 内置 → 覆盖层改名/新增 → 覆盖层删除
+       (v1 的覆盖层没有 groups 字段, 走空数组, 老的改动照样生效) */
+    const gmap = new Map();
+    for (const g of (b.groups || [])) gmap.set(g.id, { id: g.id, name: g.name, builtin: true });
+    for (const g of (ov.groups || [])) {
+      if (!g || !g.id) continue;
+      if (gmap.has(g.id)) { if (g.name != null) gmap.get(g.id).name = g.name; }
+      else gmap.set(g.id, { id: g.id, name: g.name || g.id, builtin: false });
+    }
+    for (const gid of (ov.groupDel || [])) gmap.delete(gid);
+    this.groups = [...gmap.values()];
+
     const map = new Map();
     for (const s of (b.setups || [])) {
-      map.set(s.id, { id: s.id, name: s.name, group: s.group || 'other', active: true, builtin: true });
+      map.set(s.id, {
+        id: s.id, name: s.name, group: s.group || 'other',
+        cycles: Array.isArray(s.cycles) ? s.cycles.slice() : [],
+        active: true, builtin: true,
+      });
     }
-    const ov = this.over || {};
     for (const s of (ov.list || [])) {
       if (!s || !s.id) continue;
       if (map.has(s.id)) {
@@ -51,10 +68,15 @@ const Setups = {
         if (s.name != null) t.name = s.name;
         if (s.group != null) t.group = s.group;
         if (s.active != null) t.active = !!s.active;
+        if (Array.isArray(s.cycles)) t.cycles = s.cycles.slice();
       } else {
-        map.set(s.id, { id: s.id, name: s.name || s.id, group: s.group || 'other', active: s.active !== false, builtin: false });
+        map.set(s.id, {
+          id: s.id, name: s.name || s.id, group: s.group || 'other',
+          cycles: Array.isArray(s.cycles) ? s.cycles.slice() : [],
+          active: s.active !== false, builtin: false,
+        });
         if (!this.groups.some(g => g.id === (s.group || 'other'))) {
-          this.groups.push({ id: s.group || 'other', name: s.group || '其他' });
+          this.groups.push({ id: s.group || 'other', name: s.group || '其他', builtin: false });
         }
       }
     }
@@ -63,17 +85,37 @@ const Setups = {
   },
 
   _persist() {
-    const ov = { list: [], deleted: [] };
-    const baseIds = new Set(((this.base && this.base.setups) || []).map(s => s.id));
+    const b = this.base || {};
+    const baseSetups = b.setups || [];
+    const baseGroups = b.groups || [];
+    const ov = { list: [], deleted: [], groups: [], groupDel: [] };
+
     for (const s of this.list) {
-      const base = ((this.base && this.base.setups) || []).find(x => x.id === s.id);
-      const changed = !base || base.name !== s.name || (base.group || 'other') !== s.group || !s.active;
-      if (!base) { ov.list.push({ id: s.id, name: s.name, group: s.group, active: s.active }); continue; }
-      if (changed) ov.list.push({ id: s.id, name: s.name, group: s.group, active: s.active });
+      const base = baseSetups.find(x => x.id === s.id);
+      const cur = s.cycles || [];
+      if (!base) {
+        ov.list.push({ id: s.id, name: s.name, group: s.group, active: s.active, cycles: cur.slice() });
+        continue;
+      }
+      const bcyc = Array.isArray(base.cycles) ? base.cycles : [];
+      // 周期归属只比内容, 不比顺序 —— 换个添加顺序不算改动
+      const cycSame = cur.length === bcyc.length && cur.every(c => bcyc.includes(c));
+      const changed = base.name !== s.name || (base.group || 'other') !== s.group
+        || !s.active || !cycSame;
+      if (changed) {
+        ov.list.push({ id: s.id, name: s.name, group: s.group, active: s.active, cycles: cur.slice() });
+      }
     }
-    for (const id of baseIds) {
-      if (!this.list.some(s => s.id === id)) { /* 内置不允许删, 忽略 */ }
+
+    for (const g of this.groups) {
+      const bg = baseGroups.find(x => x.id === g.id);
+      if (!bg) ov.groups.push({ id: g.id, name: g.name });
+      else if (bg.name !== g.name) ov.groups.push({ id: g.id, name: g.name });
     }
+    for (const bg of baseGroups) {
+      if (!this.groups.some(g => g.id === bg.id)) ov.groupDel.push(bg.id);
+    }
+
     this.over = ov;
     try { localStorage.setItem(this.DB, JSON.stringify(ov)); } catch (e) { }
   },
@@ -83,7 +125,7 @@ const Setups = {
   active() { return this.list.filter(s => s.active); },
   cycleName(id) { const c = this.cycles.find(c => c.id === id); return c ? c.name : (id || '未标周期'); },
 
-  /** 按组返回 [{group, items}] (只含启用的) */
+  /** 按组返回 [{group, items}] (全库, 只含启用的) —— 管理弹窗与左侧参考库用 */
   grouped() {
     const out = [];
     for (const g of this.groups) {
@@ -94,6 +136,52 @@ const Setups = {
     const rest = this.active().filter(s => !known.has(s.group));
     if (rest.length) out.push({ group: { id: '_rest', name: '未分组' }, items: rest });
     return out;
+  },
+
+  /* ================= 市场周期 (v1.2: 4 个周期各存一份清单) ================= */
+  /** 某个市场周期的清单 (启用 + 归属该周期) */
+  forCycle(cycleId) {
+    if (!cycleId) return [];
+    return this.active().filter(s => (s.cycles || []).includes(cycleId));
+  },
+
+  /** 某周期按组排好: [{group, items}] */
+  groupedFor(cycleId) {
+    const items = this.forCycle(cycleId);
+    const out = [];
+    for (const g of this.groups) {
+      const xs = items.filter(s => s.group === g.id);
+      if (xs.length) out.push({ group: g, items: xs });
+    }
+    const known = new Set(this.groups.map(g => g.id));
+    const rest = items.filter(s => !known.has(s.group));
+    if (rest.length) out.push({ group: { id: '_rest', name: '未分组' }, items: rest });
+    return out;
+  },
+
+  inCycle(id, cycleId) {
+    const s = this.byId(id);
+    return !!(s && (s.cycles || []).includes(cycleId));
+  },
+
+  /** 加进某个周期的清单 (不动其它周期) */
+  addToCycle(id, cycleId) {
+    const s = this.byId(id);
+    if (!s || !cycleId) return false;
+    if (!s.cycles) s.cycles = [];
+    if (s.cycles.includes(cycleId)) return false;
+    s.cycles.push(cycleId);
+    this._persist(); return true;
+  },
+
+  /** 从某个周期的清单移除 (setup 本身还在库里, 别的周期不受影响) */
+  removeFromCycle(id, cycleId) {
+    const s = this.byId(id);
+    if (!s || !cycleId) return false;
+    const n = (s.cycles || []).length;
+    s.cycles = (s.cycles || []).filter(c => c !== cycleId);
+    if (s.cycles.length === n) return false;
+    this._persist(); return true;
   },
 
   rename(id, name) {
@@ -112,17 +200,55 @@ const Setups = {
     if (!group) return false;
     s.group = group;
     if (!this.groups.some(g => g.id === group)) {
-      this.groups.push({ id: group, name: group });
+      this.groups.push({ id: group, name: group, builtin: false });
     }
     this._persist(); return true;
   },
 
-  add(name, group) {
+  /** 新增 setup: 同时进全局库, 但只勾给当前周期 (用户 2026-10-23 定)
+   *  这样以后在别的周期也能从左侧库点到它, 不用重敲一遍。 */
+  add(name, group, cycleId) {
     name = String(name || '').trim(); if (!name) return null;
     const id = 'u_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 5);
-    this.list.push({ id, name, group: group || 'other', active: true, builtin: false });
+    const g = group || (this.groups[0] && this.groups[0].id) || 'other';
+    this.list.push({
+      id, name, group: g, active: true, builtin: false,
+      cycles: cycleId ? [cycleId] : [],
+    });
+    if (!this.groups.some(x => x.id === g)) {
+      this.groups.push({ id: g, name: g, builtin: false });
+    }
     this._persist();
     return id;
+  },
+
+  /* ================= 组管理 (v1.2: 组名/组本身都可自定义) ================= */
+  addGroup(name) {
+    name = String(name || '').trim(); if (!name) return null;
+    if (this.groups.some(g => g.name === name)) return null;   // 重名不加
+    const id = 'g_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 5);
+    this.groups.push({ id, name, builtin: false });
+    this._persist();
+    return id;
+  },
+
+  renameGroup(gid, name) {
+    name = String(name || '').trim(); if (!name) return false;
+    const g = this.groups.find(x => x.id === gid); if (!g) return false;
+    g.name = name;
+    this._persist(); return true;
+  },
+
+  /** 删组: 组里的 setup 一个都不删, 落到「未分组」等重新归位。
+   *  返回受影响的 setup 个数。 */
+  removeGroup(gid) {
+    const i = this.groups.findIndex(x => x.id === gid);
+    if (i < 0) return 0;
+    let n = 0;
+    for (const s of this.list) { if (s.group === gid) { s.group = '_nogroup'; n++; } }
+    this.groups.splice(i, 1);
+    this._persist();
+    return n;
   },
 };
 

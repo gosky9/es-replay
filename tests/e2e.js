@@ -1770,18 +1770,63 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   check('未选 setup 就下单 → 弹窗拦下',
         (await page.isVisible('#setupModal')) && (await page.evaluate(() => Trading.pos)) === posBefore,
         'pos=' + await page.evaluate(() => Trading.pos));
-  const chipN = await page.evaluate(() => document.querySelectorAll('#setupList button[data-setup]').length);
-  check('弹窗里按组列出全部 setup', chipN >= 22, chipN + ' 个');
+  /* 弹窗 (v1.2): 左 = 全局参考库, 右 = 当前周期的清单 */
+  const libN = await page.evaluate(() => document.querySelectorAll('#setupLib [data-lib]').length);
+  check('弹窗左栏列出全局库全部 setup', libN === 23, libN + ' 个');
+  const perCycle = await page.evaluate(() => Setups.cycles.map(c => ({
+    name: c.name, ids: Setups.forCycle(c.id).map(s => s.id),
+  })));
+  check('4 个周期清单各自独立: 都含「感觉」, 数量不一样',
+        perCycle.length === 4 && perCycle.every(c => c.ids.includes('feel'))
+        && new Set(perCycle.map(c => c.ids.length)).size > 1,
+        perCycle.map(c => c.name + ':' + c.ids.length).join(' '));
+  check('一个 setup 可以同属多个周期 (H2/L2 = 突破 + 宽通道)',
+        await page.evaluate(() => Setups.inCycle('h2l2', 'breakout') && Setups.inCycle('h2l2', 'broad')));
+  const curEmpty = await page.evaluate(() => document.querySelectorAll('#setupList [data-setup]').length);
+  check('没选周期时右栏为空 (逼着先选周期)', curEmpty === 0, curEmpty + ' 个');
 
-  // 周期没选就点 setup → 仍然不下单 (两个维度都必选)
-  await page.click('#setupList button[data-setup="mtr"]');
+  // 周期没选就直调 chooseSetup → 守卫仍然拦
+  const guard1 = await page.evaluate(() => {
+    App._setupTempCycle = null;
+    App.chooseSetup('mtr');
+    return { modal: document.getElementById('setupModal').style.display, pos: Trading.pos };
+  });
+  check('没选市场周期直接选 setup → 被拦 (守卫生效)',
+        guard1.modal === 'flex' && guard1.pos === posBefore, JSON.stringify(guard1));
+
+  // 选周期 → 右栏只出现该周期的清单
+  await page.click('#setupCycleSeg button[data-cycle="tight"]');
   await page.waitForTimeout(200);
-  check('没选市场周期点 setup → 也不下单',
-        (await page.isVisible('#setupModal')) && (await page.evaluate(() => Trading.pos)) === posBefore);
+  const curN = await page.evaluate(() =>
+    [...document.querySelectorAll('#setupList [data-setup]')].map(e => e.dataset.setup));
+  check('右栏只列本月期 (窄通道 4 个, 不含宽通道用的 M2B)',
+        curN.length === 4 && curN.includes('h1l1') && !curN.includes('m2b'), curN);
+
+  // 左栏点一个本周期没有的 → 只加进右栏, 不下单
+  await page.click('#setupLib [data-lib="h2l2"]');
+  await page.waitForTimeout(250);
+  const added = await page.evaluate(() => ({
+    inCur: !!document.querySelector('#setupList [data-setup="h2l2"]'),
+    pos: Trading.pos, modal: document.getElementById('setupModal').style.display,
+  }));
+  check('左栏点 setup → 只加进右栏, 不下单',
+        added.inCur && added.pos === posBefore && added.modal === 'flex', JSON.stringify(added));
+
+  // 右栏点 × → 从本周期移出, 库里还在
+  await page.click('#setupList [data-rm="h2l2"]');
+  await page.waitForTimeout(250);
+  const removed = await page.evaluate(() => ({
+    inCur: !!document.querySelector('#setupList [data-setup="h2l2"]'),
+    inLib: !!document.querySelector('#setupLib [data-lib="h2l2"]'),
+  }));
+  check('右栏 × → 从本周期移出 (库里还留着)', !removed.inCur && removed.inLib, JSON.stringify(removed));
+
+  // 再加回来, 后面要用这一单验证 R 锁定
+  await page.click('#setupLib [data-lib="h2l2"]');
+  await page.waitForTimeout(250);
 
   // 选周期 + setup → 下单, 两个维度写到这一笔上
-  await page.click('#setupCycleSeg button[data-cycle="tight"]');
-  await page.click('#setupList button[data-setup="h2l2"]');
+  await page.click('#setupList [data-setup="h2l2"]');
   await page.waitForTimeout(300);
   const opened = await page.evaluate(() => ({
     pos: Trading.pos, setup: Trading._posSetupId, cycle: Trading._posCycle,
@@ -1975,6 +2020,30 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   check('图表已加载 + 有持仓: 仍然拦住 (防止悄悄丢掉这一笔)', ownC.ok === false, ownC.ok);
   check('拦的时候指出平仓按钮在哪', /平仓/.test(ownC.toast), ownC.toast);
   await page.evaluate(() => { Trading.reset(); App._limits = []; App.pendingSetup = null; });
+
+  /* 17. setup 管理弹窗 (v1.2: 分组可自定义 / 每个 setup 带适用周期) */
+  await page.evaluate(() => { App.openManageModal(); });
+  await page.waitForTimeout(300);
+  const mg = await page.evaluate(() => ({
+    groupRows: document.querySelectorAll('#manageGroupRows .mgrow').length,
+    setupRows: document.querySelectorAll('#manageList .manage-row').length,
+    cyc: document.querySelectorAll('#manageList .manage-row:first-child .manage-cyc label').length,
+    hasGroupAdd: !!document.getElementById('manageGroupAdd'),
+    hasNewGroupSel: !!document.getElementById('manageNewGroup'),
+  }));
+  check('管理弹窗: 分组可改名 / 删除 / 新增', mg.groupRows === 5 && mg.hasGroupAdd, mg.groupRows);
+  check('管理弹窗: 每个 setup 一行 + 4 个适用周期勾选',
+        mg.setupRows === 23 && mg.cyc === 4, [mg.setupRows, mg.cyc]);
+  check('管理弹窗: 新增 setup 时可选分组', mg.hasNewGroupSel);
+  await page.evaluate(() => Setups.renameGroup('flag', '旗形测试'));
+  await page.evaluate(() => { App.closeManageModal(); App.openSetupModal(() => { }); });
+  await page.waitForTimeout(250);
+  check('组改名立刻反映到下单弹窗', (await page.textContent('#setupLib')).includes('旗形测试'));
+  await page.evaluate(() => {
+    Setups.renameGroup('flag', '旗形');
+    App.closeSetupModal(false);
+    localStorage.removeItem('es_replay_setups');   // 别把测试改动留给用户的下一场
+  });
 
   check('无 console 错误', errors.length === 0, errors.slice(0, 3).join(' ; '));
 

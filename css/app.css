@@ -707,14 +707,31 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
 .trade-item .t-none, .trade-empty .t-none { color: var(--text-dim); font-weight: 400; font-size: 11px; }
 
 /* ---------- Setup 选择弹窗 / 管理弹窗 ---------- */
-.modal.setup-modal { width: 560px; }
-.modal.manage-modal { width: 580px; }
+.modal.setup-modal { width: 760px; }
+.modal.manage-modal { width: 720px; }
 .setup-cycles { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .setup-cycles-label { font-size: 12px; color: var(--text-dim); flex: none; }
 .setup-cycles .seg { flex: 1; }
 .setup-cycles .seg button { flex: 1; }
+
+/* 左右分栏: 左 = 全局参考库, 右 = 当前周期的清单 */
+.setup-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.setup-col { display: flex; flex-direction: column; min-width: 0; }
+.setup-col-h {
+  display: flex; align-items: baseline; gap: 6px;
+  font-size: 11.5px; color: var(--text-dim); padding: 0 2px 5px;
+}
+.setup-col-h span { font-size: 10.5px; opacity: .8; }
+.setup-col-h b {
+  margin-left: auto; font-size: 11.5px; font-weight: 500;
+  color: var(--text); background: var(--bg-sunken);
+  border-radius: 3px; padding: 1px 5px;
+}
+.setup-col.cur .setup-col-h b { color: var(--accent); }
+
 .setup-list {
-  max-height: 46vh; overflow-y: auto;
+  flex: 1;                     /* 两栏等高: 左栏长、右栏短时不至于一高一矮 */
+  max-height: 42vh; overflow-y: auto;
   border: 1px solid var(--border); border-radius: 6px;
   padding: 4px; background: var(--bg-sunken);
 }
@@ -723,28 +740,80 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
   padding: 6px 6px 4px;
   position: sticky; top: -4px; background: var(--bg-sunken);
 }
-.setup-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.setup-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
 .setup-chip {
-  text-align: left; font-family: inherit;
+  display: flex; align-items: center; gap: 4px; text-align: left; font-family: inherit;
   background: var(--bg-panel); border: 1px solid var(--border);
   color: var(--text); border-radius: 4px; padding: 6px 8px; font-size: 12px;
-  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: pointer; overflow: hidden;
+}
+.setup-chip .nm {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .setup-chip:hover { border-color: var(--accent); }
 .setup-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* 左侧: 已经在当前周期里的, 灰掉打勾, 不重复加 */
+.setup-chip.lib.in {
+  color: var(--text-dim); border-style: dashed; cursor: default; opacity: .6;
+}
+.setup-chip.lib.in:hover { border-color: var(--border); }
+.setup-chip.lib .ck { flex: none; font-size: 11px; color: var(--accent); }
+
+/* 右侧: 点本体 = 选它下单, 点 × = 从本周期移出 (不删库) */
+.setup-chip.pick .rm {
+  flex: none; width: 14px; height: 14px; padding: 0; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: none; border-radius: 3px;
+  color: var(--text-dim); font-size: 13px; cursor: pointer;
+  opacity: .35; transition: opacity .1s;
+}
+.setup-chip.pick:hover .rm { opacity: .85; }
+.setup-chip.pick .rm:hover { opacity: 1; color: var(--short); background: rgba(242, 54, 69, .12); }
+.setup-chip.pick.active .rm { color: #fff; opacity: .7; }
+
 .setup-foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
 .setup-foot .btn-ghost { padding: 6px 12px; font-size: 12px; }
 
 .manage-add { display: flex; gap: 8px; margin-bottom: 12px; }
 .manage-add input {
-  flex: 1; background: var(--bg-sunken); border: 1px solid var(--border);
+  flex: 1; min-width: 0; background: var(--bg-sunken); border: 1px solid var(--border);
   color: var(--text); border-radius: 4px; padding: 7px 10px; font-size: 13px; outline: none;
 }
 .manage-add input:focus { border-color: var(--accent); }
-.manage-list { max-height: 48vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
+.manage-add select {
+  flex: none; background: var(--bg-sunken); border: 1px solid var(--border);
+  color: var(--text); border-radius: 4px; padding: 7px 6px;
+  font-size: 12px; font-family: inherit; outline: none; cursor: pointer;
+}
+
+/* 分组管理 */
+.manage-groups {
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 2px 8px 8px; margin-bottom: 12px; background: var(--bg-sunken);
+}
+.manage-groups .setup-group-h { display: flex; gap: 8px; align-items: baseline; }
+.manage-groups .setup-group-h span { font-size: 10.5px; opacity: .75; }
+.mgrows { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 6px; margin-bottom: 8px; }
+.mgrow { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.mgrow input {
+  flex: 1; min-width: 0; background: var(--bg-panel); border: 1px solid var(--border);
+  color: var(--text); border-radius: 4px; padding: 4px 6px;
+  font-size: 11.5px; font-family: inherit; outline: none;
+}
+.mgrow input:focus { border-color: var(--accent); }
+.mgdel {
+  flex: none; width: 18px; height: 24px; padding: 0;
+  background: transparent; border: none; border-radius: 3px;
+  color: var(--text-dim); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.mgdel:hover { color: var(--short); background: var(--bg-panel); }
+
+.manage-list { max-height: 42vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
 .manage-row {
   display: grid; grid-template-columns: 1fr 116px 58px;
-  gap: 8px; align-items: center; padding: 5px 8px;
+  gap: 4px 8px; align-items: center; padding: 5px 8px;
   border-bottom: 1px solid var(--border);
 }
 .manage-row:last-child { border-bottom: none; }
@@ -766,4 +835,15 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
   font-size: 11.5px; color: var(--text-dim); cursor: pointer; white-space: nowrap;
 }
 .manage-on input { accent-color: var(--accent); cursor: pointer; }
+/* 适用周期: 独占第二行 */
+.manage-cyc {
+  grid-column: 1 / -1;
+  display: flex; flex-wrap: wrap; gap: 12px;
+  padding: 0 0 3px 6px;
+  font-size: 11px; color: var(--text-dim);
+}
+.manage-cyc em { font-style: normal; opacity: .65; margin-right: -4px; }
+.manage-cyc label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.manage-cyc input { accent-color: var(--accent); cursor: pointer; }
+.manage-cyc label:has(input:checked) { color: var(--text); }
 .manage-empty { color: var(--text-dim); text-align: center; padding: 20px 0; font-size: 12px; }

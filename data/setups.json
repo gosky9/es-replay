@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "note": "内置 setup 清单。用户在页面里改的（改名/新增/停用）存在 localStorage 覆盖层，不会改这个文件。id 一旦定下就不要改，统计靠它聚合。",
+  "version": 2,
+  "note": "内置 setup 清单。cycles 字段 = 这个 setup 出现在哪些市场周期的清单里（可以同时属于多个）。用户在页面里改的（改名/分组/启停/周期归属/新增组）存在 localStorage 覆盖层，不会改这个文件。id 一旦定下就不要改，统计靠它聚合。",
   "cycles": [
     { "id": "breakout", "name": "突破" },
     { "id": "tight",    "name": "窄通道" },
@@ -15,32 +15,32 @@
     { "id": "other",    "name": "其他" }
   ],
   "setups": [
-    { "id": "mtr",              "name": "MTR 主要趋势反转",     "group": "top10" },
-    { "id": "final_flag",       "name": "最终旗形",             "group": "top10" },
-    { "id": "breakout",         "name": "突破",                 "group": "top10" },
-    { "id": "h2l2",             "name": "H2 / L2",              "group": "top10" },
-    { "id": "three_push",       "name": "三推",                 "group": "top10" },
-    { "id": "channel",          "name": "通道",                 "group": "top10" },
-    { "id": "mm",               "name": "MM 测量移动",          "group": "top10" },
-    { "id": "range_reversal",   "name": "区间反转",             "group": "top10" },
-    { "id": "open_reversal",    "name": "开盘反转",             "group": "top10" },
-    { "id": "magnet",           "name": "磁力位（支撑/阻力）",  "group": "top10" },
+    { "id": "mtr",              "name": "MTR 主要趋势反转",     "group": "top10",    "cycles": ["range"] },
+    { "id": "final_flag",       "name": "最终旗形",             "group": "top10",    "cycles": ["breakout", "tight"] },
+    { "id": "breakout",         "name": "突破",                 "group": "top10",    "cycles": ["breakout", "tight"] },
+    { "id": "h2l2",             "name": "H2 / L2",              "group": "top10",    "cycles": ["breakout", "broad"] },
+    { "id": "three_push",       "name": "三推",                 "group": "top10",    "cycles": ["broad"] },
+    { "id": "channel",          "name": "通道",                 "group": "top10",    "cycles": [] },
+    { "id": "mm",               "name": "MM 测量移动",          "group": "top10",    "cycles": [] },
+    { "id": "range_reversal",   "name": "区间反转",             "group": "top10",    "cycles": ["range"] },
+    { "id": "open_reversal",    "name": "开盘反转",             "group": "top10",    "cycles": [] },
+    { "id": "magnet",           "name": "磁力位（支撑/阻力）",  "group": "top10",    "cycles": ["range"] },
 
-    { "id": "double_bottom",    "name": "双底",                 "group": "reversal" },
-    { "id": "double_top",       "name": "双顶",                 "group": "reversal" },
-    { "id": "climax",           "name": "高潮反转",             "group": "reversal" },
+    { "id": "double_bottom",    "name": "双底",                 "group": "reversal", "cycles": ["range"] },
+    { "id": "double_top",       "name": "双顶",                 "group": "reversal", "cycles": ["range"] },
+    { "id": "climax",           "name": "高潮反转",             "group": "reversal", "cycles": [] },
 
-    { "id": "h1l1",             "name": "H1 / L1",              "group": "pullback" },
-    { "id": "m2b",              "name": "M2B",                  "group": "pullback" },
-    { "id": "m2s",              "name": "M2S",                  "group": "pullback" },
-    { "id": "ema_pullback",     "name": "EMA 回调",             "group": "pullback" },
-    { "id": "breakout_pullback","name": "突破回调",             "group": "pullback" },
+    { "id": "h1l1",             "name": "H1 / L1",              "group": "pullback", "cycles": ["tight"] },
+    { "id": "m2b",              "name": "M2B",                  "group": "pullback", "cycles": ["broad"] },
+    { "id": "m2s",              "name": "M2S",                  "group": "pullback", "cycles": ["broad"] },
+    { "id": "ema_pullback",     "name": "EMA 回调",             "group": "pullback", "cycles": ["broad"] },
+    { "id": "breakout_pullback","name": "突破回调",             "group": "pullback", "cycles": ["breakout"] },
 
-    { "id": "bull_flag",        "name": "双底牛旗",             "group": "flag" },
-    { "id": "bear_flag",        "name": "双顶熊旗",             "group": "flag" },
+    { "id": "bull_flag",        "name": "双底牛旗",             "group": "flag",     "cycles": [] },
+    { "id": "bear_flag",        "name": "双顶熊旗",             "group": "flag",     "cycles": [] },
 
-    { "id": "gap",              "name": "缺口",                 "group": "other" },
-    { "id": "failed_breakout",  "name": "突破失败",             "group": "other" },
-    { "id": "feel",             "name": "感觉",                 "group": "other" }
+    { "id": "gap",              "name": "缺口",                 "group": "other",    "cycles": ["breakout"] },
+    { "id": "failed_breakout",  "name": "突破失败",             "group": "other",    "cycles": [] },
+    { "id": "feel",             "name": "感觉",                 "group": "other",    "cycles": ["breakout", "tight", "broad", "range"] }
   ]
 }
