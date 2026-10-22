@@ -430,10 +430,7 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
    ================================================================ */
 
 /* ---------- 顶栏: 品种区 ---------- */
-.sym-id {
-  font-size: 11px; color: var(--text-dim); letter-spacing: .3px;
-  align-self: center; margin-left: 1px;
-}
+/* .sym-id([00]) 已删 —— 那是照 TV 截图抄的静态装饰, 没有任何真实数据支撑 (用户 2026-10-22 要求删) */
 .tb-mini {
   width: 22px; height: 22px; flex: none; display: inline-flex;
   align-items: center; justify-content: center; padding: 0;
