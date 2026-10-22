@@ -1913,6 +1913,69 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
       body: JSON.stringify(bk) });
   }, journalBackup);
   check('截图保存', true, SHOT);
+
+  /* 16. 持仓的会话归属 (v1.1.1 回归)
+   *   用户报: 上一段做到一半关页面, 重开后图表是空的但 pos 还留着,
+   *   没价可平仓 → guardFlat 把「开始复盘」「结束复盘」全堵死, 根本没法用。 */
+  const staleSave = sid => ({
+    trades: [], pos: 1, avg: 5000, realized: 0, stops: [], tp: 5050, sl: 4980,
+    entryBar: { h: 5010, l: 4990 }, _entryEpoch: 1700000000, _tpGuard: false,
+    _entryPrice: 5000, _entryTime: '', _entrySide: 'long',
+    _posSetupId: 'feel', _posCycle: 'range', _addOns: 0, _maxQty: 1,
+    _closeQty: 0, _closeSum: 0, _pnlSum: 0, _exitKind: null,
+    _tpMoved: false, _slMoved: false, riskPoints: 20, initTp: 5050, initSl: 4980,
+    _riskLocked: true, _sessionId: sid,
+  });
+
+  // 16a 存档属于别的场次 → 必须丢弃, 且开始复盘的入口要能走通
+  await page.evaluate(s => {
+    localStorage.setItem('es_replay_session', 'S_E2E_NEW');
+    localStorage.setItem('es_replay_trading', JSON.stringify(s));
+  }, staleSave('S_E2E_OLD'));
+  await page.reload({ waitUntil: 'networkidle' });
+  await waitLoaded(page);
+  const ownA = await page.evaluate(() => ({
+    pos: Trading.pos, sid: App.sessionId, left: localStorage.getItem('es_replay_trading'),
+  }));
+  check('跨场残留持仓被丢弃 (不再堵住开始复盘)',
+        ownA.pos === 0 && ownA.left === null, JSON.stringify(ownA));
+  check('丢弃残留不改写本场 sessionId', ownA.sid === 'S_E2E_NEW', ownA.sid);
+  await page.click('#startBtn');
+  const canStart = await page.waitForFunction(() =>
+    document.getElementById('loadingMask').style.display === 'none'
+    && !!App.engine && App.bars.length > 0, { timeout: 90000 })
+    .then(() => true).catch(() => false);
+  check('重开后点「开始」能真的进到回放', canStart);
+
+  // 16b 存档 sessionId 与当前一致 → 保留 (这才是「继续上次」)
+  const curSid = await page.evaluate(() => App.sessionId);
+  await page.evaluate(s => localStorage.setItem('es_replay_trading', JSON.stringify(s)),
+    staleSave(curSid));
+  await page.reload({ waitUntil: 'networkidle' });
+  await waitLoaded(page);
+  const ownB = await page.evaluate(() => {
+    const pos0 = Trading.pos;
+    const g = App.guardFlat('换一段行情');   // 图表还没建, 没有价可平
+    return { pos0, g, after: Trading.pos };
+  });
+  check('同场持仓保留 (继续上次的语义)', ownB.pos0 === 1, ownB.pos0);
+  check('图表未加载时 guardFlat 放行, 死不回去', ownB.g === true, ownB.g);
+  check('放行的同时清掉无处可平的残留持仓', ownB.after === 0, ownB.after);
+  // 图表已加载 + 有持仓时仍要拦 (这条本来是对的, 别改坏)
+  await page.click('#startBtn');
+  await page.waitForFunction(() => document.getElementById('loadingMask').style.display === 'none'
+    && !!App.engine && App.bars.length > 0, { timeout: 90000 });
+  await giveSetup(page);
+  await page.click('#btnBuy');
+  await page.waitForFunction(() => Trading.pos !== 0, { timeout: 10000 });
+  const ownC = await page.evaluate(() => {
+    const ok = App.guardFlat('换一段行情');
+    return { ok, pos: Trading.pos, toast: document.getElementById('toast').textContent };
+  });
+  check('图表已加载 + 有持仓: 仍然拦住 (防止悄悄丢掉这一笔)', ownC.ok === false, ownC.ok);
+  check('拦的时候指出平仓按钮在哪', /平仓/.test(ownC.toast), ownC.toast);
+  await page.evaluate(() => { Trading.reset(); App._limits = []; App.pendingSetup = null; });
+
   check('无 console 错误', errors.length === 0, errors.slice(0, 3).join(' ; '));
 
   await browser.close();

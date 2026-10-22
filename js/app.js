@@ -29,16 +29,20 @@ const App = {
     ChartMgr.theme = this.theme;
     ChartMgr.init();
     Draw.init();
-    Trading.load();
-    Trading.onChange = () => this.renderTrading();
 
-    /* 本次复盘 id + setup 清单 + 账本 (都会用到, 先就位) */
+    /* 本次复盘 id 必须排在 Trading.load() 前面: 持仓靠它做归属校验,
+       不是本场的持仓要在恢复阶段就丢掉, 免得挡住「开始复盘」 */
     try {
       this.sessionId = localStorage.getItem('es_replay_session') ||
         ('S' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5));
       localStorage.setItem('es_replay_session', this.sessionId);
       this.pendingCycle = localStorage.getItem('es_replay_cycle') || null;
     } catch (e) { this.sessionId = 'S' + Date.now().toString(36); }
+
+    Trading.load();
+    Trading.onChange = () => this.renderTrading();
+
+    /* setup 清单 + 账本 */
     this.syncSetupUI();
     try { await Setups.load(); } catch (e) { console.error('setups load failed', e); }
     this.syncSetupUI(); this.syncManageList();
@@ -650,10 +654,21 @@ const App = {
   },
 
   /* ---------- 会话生命周期 ---------- */
-  /** 持仓中不允许换行情/清空 —— 否则这一笔的 R 就丢了 */
+  /** 持仓中不允许换行情/清空 —— 否则这一笔的 R 就丢了。
+   *
+   *  ⚠️ 图表还没加载时一律放行 (2026-10-23 用户报的死锁):
+   *  那时没有任何价格, 用户根本没有平仓的入口, 拦下来就是走投无路。
+   *  这种情况下残留持仓已由 Trading.load() 按 sessionId 清理, 这里再兜一次底。 */
   guardFlat(what) {
+    if (!this.engine) {
+      if (Trading.pos !== 0) {
+        Trading.reset();          // 图表都没了, 这笔无从平起, 直接丢弃(账本里本来就没有它)
+        Draw.render();
+      }
+      return true;
+    }
     if (Trading.pos !== 0) {
-      this.toast(`当前有持仓, 请先平仓再${what || '继续'}`, true);
+      this.toast(`当前有持仓, 先点右侧面板的「平仓」再${what || '继续'}`, true);
       return false;
     }
     return true;

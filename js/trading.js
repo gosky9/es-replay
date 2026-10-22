@@ -51,13 +51,27 @@ const Trading = {
   initTp: null,            // 锁定的初始止盈价
   initSl: null,            // 锁定的初始止损价
   _riskLocked: false,      // R 是否已锁定
+  _sessionId: null,        // 这笔持仓属于哪一场复盘 (换了行情就不能再算数)
 
   /* ================= 持久化 ================= */
+  /** 从 localStorage 恢复。
+   *
+   *  ⚠️ 持仓必须绑 sessionId —— 否则会死锁 (2026-10-23 用户报):
+   *  上一段做到一半关掉页面, 重开后 pos 还留着, 但图表是空的:
+   *  没价可平仓 → guardFlat() 挡住「重新开始复盘」和「结束复盘」→ 完全没法用。
+   *  归属对不上(或老存档没有归属)就整笔丢掉: 这笔本来就没平、账本里也没有,
+   *  扔掉不损失任何记录。 */
   load() {
     try {
       const s = localStorage.getItem('es_replay_trading');
       if (s) {
         const d = JSON.parse(s);
+        // —— 归属校验: 不是本场的一律丢弃 ——
+        const mine = (typeof App !== 'undefined') ? App.sessionId : null;
+        if (mine && d._sessionId !== mine) {
+          localStorage.removeItem('es_replay_trading');
+          return;
+        }
         this.trades = d.trades || []; this.pos = d.pos || 0;
         this.avg = d.avg || 0; this.realized = d.realized || 0;
         this.stops = d.stops || []; this.tp = d.tp ?? null; this.sl = d.sl ?? null;
@@ -82,6 +96,7 @@ const Trading = {
         this.initTp = d.initTp ?? null;
         this.initSl = d.initSl ?? null;
         this._riskLocked = !!d._riskLocked;
+        this._sessionId = d._sessionId || mine;
         // 关浏览器时还没走完入场当根 → 重开后如果已经不在那一根, 立刻补锁
         if (this.pos !== 0 && !this._riskLocked && this._entryEpoch != null) {
           const cur = (typeof App !== 'undefined' && App.engine && App.engine.current) ? App.engine.current : null;
@@ -92,6 +107,7 @@ const Trading = {
   },
 
   save() {
+    this._sessionId = (typeof App !== 'undefined' && App.sessionId) || this._sessionId || null;
     localStorage.setItem('es_replay_trading', JSON.stringify({
       trades: this.trades.slice(-200), pos: this.pos, avg: this.avg, realized: this.realized,
       stops: this.stops, tp: this.tp, sl: this.sl,
@@ -102,7 +118,7 @@ const Trading = {
       _closeQty: this._closeQty, _closeSum: this._closeSum, _pnlSum: this._pnlSum,
       _exitKind: this._exitKind, _tpMoved: this._tpMoved, _slMoved: this._slMoved,
       riskPoints: this.riskPoints, initTp: this.initTp, initSl: this.initSl,
-      _riskLocked: this._riskLocked,
+      _riskLocked: this._riskLocked, _sessionId: this._sessionId,
     }));
     this.onChange && this.onChange();
   },
@@ -118,6 +134,7 @@ const Trading = {
     this._exitKind = null; this._tpMoved = false; this._slMoved = false;
     this.riskPoints = null; this.initTp = null; this.initSl = null;
     this._riskLocked = false;
+    this._sessionId = (typeof App !== 'undefined' && App.sessionId) || null;
     localStorage.removeItem('es_replay_trading');
     this.onChange && this.onChange();
   },
