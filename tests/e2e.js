@@ -1640,6 +1640,52 @@ const waitLoaded = page => page.waitForFunction(
           repTarget.d + ' → ' + (popup ? popup.url() : '没弹'));
     if (popup) await popup.close();
 
+    /* 回来之后不能卡在"鼠标一直按着"的状态:
+       mouseup 若被 stopPropagation 拦住, 图表(document 冒泡阶段监听)收不到,
+       不按键光移鼠标图表就跟着平移 —— 用户 2026-10-22 报的 bug */
+    await page.bringToFront();
+    const lrA = await page.evaluate(() => {
+      const r = ChartMgr.chart.timeScale().getVisibleLogicalRange();
+      return [Math.round(r.from * 100) / 100, Math.round(r.to * 100) / 100];
+    });
+    await page.mouse.move(cb.x + 600, cb.y + 300);
+    await page.mouse.move(cb.x + 820, cb.y + 300);
+    await page.waitForTimeout(260);
+    const lrB = await page.evaluate(() => {
+      const r = ChartMgr.chart.timeScale().getVisibleLogicalRange();
+      return [Math.round(r.from * 100) / 100, Math.round(r.to * 100) / 100];
+    });
+    check('点完日报回来, 图表没卡在按下状态(不按键移鼠标不跟着平移)',
+          lrA[0] === lrB[0] && lrA[1] === lrB[1], JSON.stringify(lrA) + ' → ' + JSON.stringify(lrB));
+
+    // 双击同一天只开一个 (600ms 去抖); 先等过去抖窗口
+    await page.waitForTimeout(800);
+    await page.evaluate(() => {
+      window.__opens = [];
+      window.__openOrig = window.open;
+      window.open = u => { window.__opens.push(u); return null; };
+    });
+    await page.mouse.move(cb.x + repTarget.x, axisY);
+    await page.mouse.down(); await page.mouse.up();
+    await page.mouse.down(); await page.mouse.up();
+    await page.waitForTimeout(350);
+    const nDbl = await page.evaluate(() => { window.open = window.__openOrig; return window.__opens.length; });
+    check('双击同一天只打开一次(不重复开标签页)', nDbl === 1, 'window.open × ' + nDbl);
+
+    // 拖动时间轴 40px → 不该误开日报
+    await page.evaluate(() => {
+      window.__opens = [];
+      window.__openOrig = window.open;
+      window.open = u => { window.__opens.push(u); return null; };
+    });
+    await page.mouse.move(cb.x + repTarget.x, axisY);
+    await page.mouse.down();
+    await page.mouse.move(cb.x + repTarget.x + 40, axisY, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    const nDrag = await page.evaluate(() => { window.open = window.__openOrig; return window.__opens.length; });
+    check('拖动时间轴缩放不误开日报', nDrag === 0, 'window.open × ' + nDrag);
+
     // 点一个无日报的日子 → 不弹
     const emptyDay = await page.evaluate(() => {
       const bars = ChartMgr._lastData, ts = ChartMgr.chart.timeScale();

@@ -840,6 +840,7 @@ const Draw = {
     if (this._reportClickBound) return;
     this._reportClickBound = true;
     let downX = 0, downY = 0, onAxis = false;
+    let lastOpenAt = 0, lastOpenDay = '';      // 双击去抖: 同一天 600ms 内只开一次
 
     area.addEventListener('mousedown', e => {
       if (e.button !== 0) { onAxis = false; return; }
@@ -859,7 +860,16 @@ const Draw = {
       const d = this.dateAtX(p.x);
       const r = d && Reports.get(d);
       if (!r) return;
-      e.preventDefault(); e.stopPropagation();
+      // 双击同一天: 只算一次 (否则会连开两个一模一样的标签页)
+      const now = Date.now();
+      if (d === lastOpenDay && now - lastOpenAt < 600) return;
+      lastOpenDay = d; lastOpenAt = now;
+      // 注意: 这里绝对不能再 stopPropagation。
+      // lightweight-charts 的"拖动平移"监听挂在 document 的冒泡阶段, mousedown 之后
+      // 一直等 mouseup 才松手。在这里把 mouseup 拦死 → 图表以为你还按着鼠标,
+      // 从新标签页回来不按键光移动鼠标, 图表就跟着平移(用户 2026-10-22 反馈的现象)。
+      // 只 preventDefault(防止浏览器把这次点击当文本选择/拖拽), 事件继续正常传播给图表。
+      e.preventDefault();
       window.open(r.u, '_blank', 'noopener');
       if (typeof App !== 'undefined' && App.toast) App.toast(`打开 ${d} 的日报: ${r.t || r.u}`);
     }, true);
