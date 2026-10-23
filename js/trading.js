@@ -263,12 +263,13 @@ const Trading = {
         if (hit) {
           const px = o.side === 'buy' ? Math.max(o.price, bar.o) : Math.min(o.price, bar.o);
           const gap = Math.abs(px - o.price) > (this.TICK || 0.25) * 0.5;
-          this.fill(o.side, o.qty, px, 'stop', epoch, off, {
+          const r = this.fill(o.side, o.qty, px, 'stop', epoch, off, {
             bar, prev: ctx && ctx.prev,
             setupId: o.setupId, cycle: o.cycle,
             planTp: o.tp, planSl: o.sl, gapEntry: gap,
           });
-          ev.push({ type: 'fill', side: o.side, price: px, qty: o.qty });
+          // closed 带上: 持仓中挂的反向突破单是用来平仓的, 盘面箭头要画成灰 (出场)
+          ev.push({ type: 'fill', side: o.side, price: px, qty: o.qty, closed: r.closed });
           this._logOrders([o], 'filled', epoch, off,
             { price: px, epoch, time: etTimeStr(epoch, off) });
         } else {

@@ -29,6 +29,13 @@ const Draw = {
   MARK: { w: 16.5, h: 19, stemW: 9.5, stemH: 9 },
   MARK_UP: '#70ccbd',       // 买 (在 K 线下方, 箭头朝上) — 截图 rgb(112,204,189)
   MARK_DOWN: '#cc2f3c',     // 卖 (在 K 线上方, 箭头朝下) — 截图 rgb(204,47,60)
+  /* 出场 (平仓) 用灰 —— 用户 2026-10-24 拍板:
+     方向 (朝上=买 / 朝下=卖) + 位置 (K 下 / K 上) 已经两重编码了"买还是卖",
+     颜色这一层就空出来专门标"开还是收": 入场保留青绿/红, 出场一律灰。
+     好处是不跟涨跌色打架 (红/绿在这套界面里已经被 K 线阴阳、盈亏占满了),
+     且"灰 = 收尾"层级上和入场天然分得开。取的是同项目 --text-dim 的 #787b86,
+     和盘面其它次要文字同色, 不引入新的色相。 */
+  MARK_EXIT: '#787b86',
   // 尖端到 K 线高/低点: 截两个样本量到 21 device (红) / 6 device (绿), 差别较大,
   // 取中间偏小 8 device = 4 CSS (太远了会飘, 太近了压到影线)
   MARK_GAP: 4,
@@ -887,7 +894,8 @@ const Draw = {
 
   /** 成交标记: 大箭头 ----------
      照用户 2026-10-22 截图逐像素描出来: 杆 19×18 + 三角头 33×20, 总 33×38, 平头平尾无描边。
-     买 = K 线下方、箭头朝上、青绿 #70ccbd; 卖 = K 线上方、朝下、红 #cc2f3c。 */
+     买 = K 线下方、箭头朝上、青绿 #70ccbd; 卖 = K 线上方、朝下、红 #cc2f3c。
+     出场 (m.isExit) 不分方向一律灰 #787b86 —— 见 MARK_EXIT 的注释。 */
   arrowShape(ctx, cx, cy, dir) {
     const { w, h, stemW, stemH } = this.MARK;
     const half = w / 2, sh = stemW / 2;
@@ -933,7 +941,7 @@ const Draw = {
       const half = this.MARK.h / 2;
       const cy = buy ? yEdge + this.MARK_GAP + half : yEdge - this.MARK_GAP - half;
       this.arrowShape(ctx, x, cy, buy ? 1 : -1);
-      ctx.fillStyle = buy ? this.MARK_UP : this.MARK_DOWN;
+      ctx.fillStyle = m.isExit ? this.MARK_EXIT : (buy ? this.MARK_UP : this.MARK_DOWN);
       ctx.fill();
     }
     ctx.restore();

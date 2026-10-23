@@ -1712,13 +1712,13 @@ const App = {
     const setupId = adding ? (Trading._posSetupId || null) : this.pendingSetup;
     const cycle = adding ? (Trading._posCycle || null) : this.pendingCycle;
     if (this.orderType === 'market') {
-      Trading.fill(side, qty, cur.c, 'market', cur.epoch, cur.off,
+      const r = Trading.fill(side, qty, cur.c, 'market', cur.epoch, cur.off,
                    { bar: cur, prev: this.prevBars(Trading.SL_LOOKBACK), setupId, cycle });
       this.toast(`${side === 'buy' ? '买入' : '卖出'} ${qty} 手 @ ${cur.c.toFixed(2)} · ` +
                  (adding ? '加仓' : (wasPos === 0 ? Setups.name(setupId) : '减仓')));
       if (wasPos === 0) this.consumeSetup();
       this.renderTrading();
-      this.addMarker(side, cur.c);
+      this.addMarker(side, cur.c, r.closed > 0);
     } else {
       const lp = +document.getElementById('limitPrice').value;
       if (!lp || lp <= 0) { this.toast('请输入有效限价', true); return; }
@@ -1768,7 +1768,13 @@ const App = {
     if (flat) this.consumeSetup();
   },
 
-  addMarker(side, price) {
+  /** 记一个成交标记 (盘面上的大箭头)
+   *  isExit = 这次成交**平掉了**仓位 (平仓/止损/止盈/减仓), draw.js 会画成灰色;
+   *  否则就是入场 (开新仓 / 加仓), 画成青绿或红。
+   *  判据统一来自 Trading.fill() 的返回值 closed —— 它 >0 就说明有手数被平掉,
+   *  而 fill 内部"同向=加仓 opened / 反向=平仓 closed"是互斥的, 所以不会两边都算。
+   *  用户 2026-10-24: 原来入场出场同色, 分不清 → 出场改灰。 */
+  addMarker(side, price, isExit) {
     const cur = this.engine.current;
     const isDay = (this.tf === '1d' || this.tf === '1w');
     const t = isDay ? etDateStr(cur.epoch, cur.off) : chartTime(cur.epoch, cur.off);
@@ -1776,10 +1782,11 @@ const App = {
     m.push({
       time: t,
       position: side === 'buy' ? 'belowBar' : 'aboveBar',
-      color: side === 'buy' ? Draw.MARK_UP : Draw.MARK_DOWN,   // 只是记录, 实际颜色由 draw.js 定
+      color: isExit ? Draw.MARK_EXIT : (side === 'buy' ? Draw.MARK_UP : Draw.MARK_DOWN),  // 只是记录, 实际颜色由 draw.js 定
       shape: side === 'buy' ? 'arrowUp' : 'arrowDown',
       text: side === 'buy' ? '买' : '卖',
       price,
+      isExit: !!isExit,
     });
     ChartMgr.setMarkers(m);   // setMarkers 内部按 time 升序排
     Draw.render();            // 大箭头是我们自己画的, 要主动重绘一帧
@@ -1793,11 +1800,11 @@ const App = {
       if (o.side === 'buy' && bar.l <= o.price) filled = true;
       if (o.side === 'sell' && bar.h >= o.price) filled = true;
       if (filled) {
-        Trading.fill(o.side, o.qty, o.price, 'limit', bar.epoch, bar.off,
+        const r = Trading.fill(o.side, o.qty, o.price, 'limit', bar.epoch, bar.off,
                      { bar, prev: this.prevBars(Trading.SL_LOOKBACK),
                        setupId: o.setupId, cycle: o.cycle });
         this.toast(`限价成交: ${o.side === 'buy' ? '买入' : '卖出'} ${o.qty} 手 @ ${o.price.toFixed(2)}`);
-        this.addMarker(o.side, o.price);
+        this.addMarker(o.side, o.price, r.closed > 0);
       } else remain.push(o);
     }
     this._limits = remain;
@@ -1812,7 +1819,7 @@ const App = {
     for (const ev of evs) {
       if (ev.type === 'fill') {
         this.toast(`突破${ev.side === 'buy' ? '买入' : '卖出'}成交 ${ev.qty} 手 @ ${ev.price.toFixed(2)}`);
-        this.addMarker(ev.side, ev.price);
+        this.addMarker(ev.side, ev.price, ev.closed > 0);
       } else if (ev.type === 'risk_locked') {
         // 初始风险锁定: 从这一刻起 R 的分母定了, 之后再挪止损/加仓都不改
         if (ev.risk != null) this.toast(`初始风险已锁定: ${ev.risk.toFixed(2)} 点 (R 的分母)`);
@@ -1822,7 +1829,7 @@ const App = {
       } else {
         const isTp = ev.kind === 'tp' || ev.kind === 'tp_extend';
         this.toast(`${isTp ? '止盈' : '止损'}触发 @ ${ev.price.toFixed(2)} · 已平仓`);
-        this.addMarker(ev.side, ev.price);
+        this.addMarker(ev.side, ev.price, true);          // 止盈/止损必然是出场
       }
     }
   },
@@ -1904,9 +1911,12 @@ const App = {
     if (Trading.pos === 0) { this.toast('当前无持仓'); return; }
     const cur = this.engine.current;
     const qty = Math.abs(Trading.pos);
-    const r = Trading.fill(Trading.pos > 0 ? 'sell' : 'buy', qty, cur.c, 'market', cur.epoch, cur.off);
+    /* side 必须在 fill 之前定: fill 一执行 pos 就归零了, 事后再判 Trading.pos > 0 永远是 false,
+       平空仓的箭头会错画成"买"(下方朝上)。这是 v1.2.5 顺手修掉的旧 bug。 */
+    const side = Trading.pos > 0 ? 'sell' : 'buy';
+    const r = Trading.fill(side, qty, cur.c, 'market', cur.epoch, cur.off);
     this.toast(`平仓 ${qty} 手 @ ${cur.c.toFixed(2)} · 盈亏 ${(r.pnl >= 0 ? '+' : '') + r.pnl.toFixed(0)}$`);
-    this.addMarker(Trading.pos > 0 ? 'sell' : 'buy', cur.c);
+    this.addMarker(side, cur.c, true);                 // 手动平仓必然是出场
     this.renderTrading();
   },
 

@@ -36,3 +36,6 @@ _*.png
 _*.js
 _*.py
 reference/_crop*.png
+
+# e2e 日志
+_*.log

@@ -1182,6 +1182,140 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         && markPix.marks.every(m => m.n > 90 && Math.abs(m.w - 16.5) <= 2 && Math.abs(m.h - 19) <= 2),
         JSON.stringify(markPix));
 
+  /* ---- 入场 / 出场 靠颜色区分 (用户 2026-10-24: 原来两者同色, 分不清 → 出场改灰 #787b86) ----
+     判据是 Trading.fill() 的 closed: >0 说明这次成交平掉了仓位。
+     下面用真实下单接口把「哪种成交算出场」的四个分支都过一遍:
+       回合  开 1 手 → 手动平          = 入场 + 出场
+       加仓  开 1 手 → 同向再开 1 手   = 入场 + 入场   (加仓不是出场)
+       减仓  开 2 手 → 反向卖 1 手     = 入场 + 出场   (还有 1 手在场, 仍是出场)
+       突破  持仓中反向突破单成交      = 入场 + 出场   (Trading.checkBar 传来的 closed) */
+  const mkKinds = await page.evaluate(() => {
+    const fmt = () => ChartMgr.markers.map(m => (m.isExit ? 'E' : 'N') + (m.shape === 'arrowUp' ? 'b' : 's')).join(' ');
+    const flat = () => { if (Trading.pos !== 0) App.closePosition(); };
+    const run = seeds => {
+      flat(); ChartMgr.setMarkers([]);
+      App.orderType = 'market';
+      const q = document.getElementById('orderQty');
+      for (const [n, s] of seeds) { q.value = String(n); App._doPlaceOrder(s); }
+      const out = fmt();
+      flat();
+      return out;
+    };
+    const round = run([[1, 'buy'], [1, 'sell']]);
+    const add = run([[1, 'buy'], [1, 'buy']]);
+    const trim = run([[2, 'buy'], [1, 'sell']]);
+
+    // 持仓中反向突破单成交 → 这笔成交是平仓 (靠 checkBar 事件带过来的 closed 判定)
+    flat(); ChartMgr.setMarkers([]);
+    const q = document.getElementById('orderQty');
+    q.value = '1'; App._doPlaceOrder('buy');
+    const b = App.engine.current;
+    Trading.placeStop('sell', 1, b.l, { tp: null, sl: null, placeTf: ChartMgr.tf });
+    // 造一根当根同高的假 K 线喂给交易检查: 刚好扫到这张卖单, 又碰不到止盈/止损
+    App.runTradeChecks({ epoch: b.epoch + 60, off: b.off, o: b.c, h: b.h, l: b.l, c: b.c });
+    const stop = fmt();
+    flat(); Trading.clearStops();
+    return { round, add, trim, stop };
+  });
+  check('成交种类判对: 开→平=入场+出场 / 加仓=入场+入场 / 减仓=入场+出场 / 反手突破单=入场+出场',
+        mkKinds.round === 'Nb Es' && mkKinds.add === 'Nb Nb'
+        && mkKinds.trim === 'Nb Es' && mkKinds.stop === 'Nb Es',
+        JSON.stringify(mkKinds));
+
+  /* 像素验收: 入场那枚还是青绿, 出场那枚是灰 #787b86 (120,123,134)。
+     中间隔一根 K 线再平, 免得两枚箭头贴在一起互相污染取样窗。 */
+  const mkColor = await page.evaluate(async () => {
+    const raf = () => new Promise(r => requestAnimationFrame(r));
+    if (App.engine.playing) App.engine.pause();
+    if (Trading.pos !== 0) App.closePosition();
+    ChartMgr.setMarkers([]);
+    App.orderType = 'market';
+    const q = document.getElementById('orderQty');
+    q.value = '1';
+    App._doPlaceOrder('buy');                    // 入场
+    App.engine.step(1);                          // 换下一根
+    if (Trading.pos !== 0) App.closePosition();  // 出场 (若上一根已被止盈止损扫掉, 这里就是空操作)
+
+    const i = App.engine.idx;
+    ChartMgr.chart.timeScale().setVisibleLogicalRange({ from: i - 60, to: i + 8 });
+    await raf(); await raf();
+    Draw.render();
+
+    const c = document.getElementById('drawLayer');
+    const k = c.width / parseFloat(c.style.width || c.width);
+    const ctx = c.getContext('2d');
+    const countAt = (cx, cy, col) => {
+      const x = Math.round(cx * k), y = Math.round(cy * k);
+      const n = Math.max(6, Math.round(8 * k));
+      if (x - n < 0 || y - n < 0 || x + n > c.width || y + n > c.height) return -1;
+      const d = ctx.getImageData(x - n, y - n, n * 2, n * 2).data;
+      let c0 = 0;
+      for (let j = 0; j < d.length; j += 4) {
+        if (Math.abs(d[j] - col[0]) < 12 && Math.abs(d[j + 1] - col[1]) < 12 && Math.abs(d[j + 2] - col[2]) < 12) c0++;
+      }
+      return c0;
+    };
+    const TEAL = [112, 204, 189], RED = [204, 47, 60], GRAY = [120, 123, 134];
+    const out = [];
+    for (const m of ChartMgr.markers) {
+      const b = ChartMgr.barByTime(m.time);
+      if (!b) { out.push({ miss: m.time }); continue; }
+      const buy = m.shape === 'arrowUp';
+      const ye = Draw.yOf(buy ? b.l : b.h);
+      const cy = buy ? ye + Draw.MARK_GAP + Draw.MARK.h / 2 : ye - Draw.MARK_GAP - Draw.MARK.h / 2;
+      const x = Draw.xOf(b.t);
+      out.push({
+        exit: !!m.isExit, buy, pos: m.position, time: m.time,
+        teal: countAt(x, cy, TEAL), red: countAt(x, cy, RED), gray: countAt(x, cy, GRAY),
+      });
+    }
+    return out;
+  });
+  check('入场箭头仍是青绿 #70ccbd, 出场箭头画成灰 #787b86',
+        mkColor.length === 2
+        && mkColor[0].exit === false && mkColor[0].teal > 90 && mkColor[0].gray < 30
+        && mkColor[1].exit === true && mkColor[1].gray > 90 && mkColor[1].teal < 30 && mkColor[1].red < 30,
+        JSON.stringify(mkColor));
+
+  /* 手动平空仓时的箭头方向: 曾经有个 bug —— addMarker 在 fill 之后才读 Trading.pos,
+     而那时仓位已经归零, 于是平空仓也画成"买"(K 下朝上)。这里把空仓那条路径钉死。 */
+  const shortExit = await page.evaluate(() => {
+    if (Trading.pos !== 0) App.closePosition();
+    ChartMgr.setMarkers([]);
+    App.orderType = 'market';
+    const q = document.getElementById('orderQty');
+    q.value = '1';
+    App._doPlaceOrder('sell');            // 开空
+    App.closePosition();                  // 平空 → 应该是"买"方向 (K 下, 朝上), 但必须是灰的
+    const m = ChartMgr.markers[1] || {};
+    return { shape: m.shape, position: m.position, isExit: !!m.isExit };
+  });
+  check('平空仓的出场箭头方向正确 (买/朝上/在 K 线下方) 且为灰色',
+        shortExit.shape === 'arrowUp' && shortExit.position === 'belowBar' && shortExit.isExit === true,
+        JSON.stringify(shortExit));
+
+  /* 上面几段把仓位都平干净了, 而后面「交易线右侧牌子」用例是接着一笔**持仓中**的交易做的。
+     原来那个状态是靠早期突破单成交后一直持有留下的, 这里补一笔市价开仓把 tp/sl 挂回来。
+     tp/sl 要按当前可见价格区间拉开: 市价单的自动括号有时只有 2 个点, 而 draw.js 有
+     「牌子离入场线不到 26px 就跳过」的去重叠逻辑, 太近会导致 tp/sl 两块牌子都不出来。 */
+  await page.evaluate(() => {
+    if (Trading.pos === 0) {
+      App.orderType = 'market';
+      document.getElementById('orderQty').value = '1';
+      App._doPlaceOrder('buy');        // 空仓开多 → setAutoBrackets 自动挂 tp/sl
+    }
+    const vis = App.visibleBars() || [];
+    if (vis.length) {
+      const hi = Math.max(...vis.map(b => b.h)), lo = Math.min(...vis.map(b => b.l));
+      const span = Math.max(hi - lo, 8);
+      // 0.16 / 0.10 是量出来的: 再远一点止损牌就掉到时间轴那条带里, 点 ✕ 会点不中
+      Trading.tp = Math.round((Trading.avg + span * 0.16) * 100) / 100;
+      Trading.sl = Math.round((Trading.avg - span * 0.10) * 100) / 100;
+      Trading.save();
+    }
+    App.renderTrading(); Draw.render();
+  });
+
   /* 上/下箭头也是绘图工具: 点一下落一个, 位置就是点下去的地方 */
   await page.evaluate(() => { Draw.clearAll(); Draw.setTool('arrowup'); });
   const dArea = await page.locator('#chartArea').boundingBox();
