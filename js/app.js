@@ -248,6 +248,7 @@ const App = {
     });
 
     /* setup 选择弹窗 */
+    this.bindModalDrag($('setupModal').querySelector('.modal'));   // 能拖走, 免得挡住 K 线
     $('setupModalClose').addEventListener('click', () => this.closeSetupModal(false));
     $('setupCancelBtn').addEventListener('click', () => this.closeSetupModal(false));
     $('setupCycleSeg').addEventListener('click', e => {
@@ -1314,6 +1315,59 @@ const App = {
     if (this.pendingSetup === id) this.consumeSetup();
     this.syncSetupModal();
     this.toast(`已从「${Setups.cycleName(cur)}」移出（库里还留着）`);
+  },
+
+  /* ---------- 弹窗拖动 ----------
+     setup 弹窗会盖住 K 线, 用户要一边对照盘面一边选入场原因 (2026-10-23 要求)。
+     按住空白处 / 边框 / 标题就能挪; 点在按钮、输入框、可滚动列表、setup 卡片上不拖,
+     免得把点击和滚动抢掉。位置只在本次会话里保留(关掉再开还在原处), 不写 localStorage ——
+     用户只要求"能拖", 没要求记住位置。 */
+  bindModalDrag(modal) {
+    if (!modal || modal._dragBound) return;
+    modal._dragBound = true;
+    let sx = 0, sy = 0, ox = 0, oy = 0, on = false;
+    let baseL = 0, baseT = 0, mw = 0, mh = 0;
+
+    /* 偏移只存在 transform 上, 用时读回来, 免得和外部改动不同步 */
+    const getXY = () => {
+      const m = /translate\(\s*(-?[\d.]+)px\s*,\s*(-?[\d.]+)px\s*\)/.exec(modal.style.transform || '');
+      return m ? { x: +m[1], y: +m[2] } : { x: 0, y: 0 };
+    };
+    /* 夹在视口内: 拖出去就再也抓不回来了(留 8px 边) */
+    const place = (x, y) => {
+      const minX = 8 - baseL, maxX = innerWidth - 8 - baseL - mw;
+      const minY = 8 - baseT, maxY = innerHeight - 8 - baseT - mh;
+      const cx = Math.min(Math.max(x, Math.min(minX, maxX)), Math.max(minX, maxX));
+      const cy = Math.min(Math.max(y, Math.min(minY, maxY)), Math.max(minY, maxY));
+      modal.style.transform = `translate(${cx}px, ${cy}px)`;
+    };
+
+    modal.addEventListener('mousedown', e => {
+      if (e.button !== 0) return;
+      /* 这些地方按下是要"点"或"滚"的, 不是要拖窗口 */
+      if (e.target.closest('button, input, select, textarea, a, label, .setup-list, .setup-chip, .seg')) return;
+      const p = getXY();
+      const r = modal.getBoundingClientRect();
+      /* 记录未平移时的左上角, 拖动中算边界要用 */
+      baseL = r.left - p.x; baseT = r.top - p.y; mw = r.width; mh = r.height;
+      sx = e.clientX; sy = e.clientY; ox = p.x; oy = p.y;
+      on = true;
+      modal.classList.add('dragging');
+      document.body.style.userSelect = 'none';
+      e.preventDefault();                    // 别把这次按下当成选文字
+    });
+
+    document.addEventListener('mousemove', e => {
+      if (!on) return;
+      place(ox + (e.clientX - sx), oy + (e.clientY - sy));
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!on) return;
+      on = false;
+      modal.classList.remove('dragging');
+      document.body.style.userSelect = '';
+    });
   },
 
   /** 打开 setup 弹窗; cb = 选完之后要执行的动作 (下单) */

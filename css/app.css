@@ -711,7 +711,13 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
 .trade-item .t-none, .trade-empty .t-none { color: var(--text-dim); font-weight: 400; font-size: 11px; }
 
 /* ---------- Setup 选择弹窗 / 管理弹窗 ---------- */
-.modal.setup-modal { width: 760px; }
+.modal.setup-modal { width: 760px; cursor: move; }   /* 空白处按住能把弹窗拖走 */
+/* setup 弹窗会盖住 K 线, 用户要一边对照盘面一边选原因 (2026-10-23 要求):
+   按住空白处/边框可以挪走。列表区保持普通光标 —— 那里要滚动和点选,
+   显示"移动"手型会误导; 拖动中整块变抓手。 */
+.modal.setup-modal .setup-list { cursor: default; }
+.modal.setup-modal.dragging,
+.modal.setup-modal.dragging * { cursor: grabbing !important; }
 .modal.manage-modal { width: 720px; }
 .setup-cycles { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .setup-cycles-label { font-size: 12px; color: var(--text-dim); flex: none; }

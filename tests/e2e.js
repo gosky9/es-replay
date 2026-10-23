@@ -1805,6 +1805,30 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   check('未选 setup 就下单 → 弹窗拦下',
         (await page.isVisible('#setupModal')) && (await page.evaluate(() => Trading.pos)) === posBefore,
         'pos=' + await page.evaluate(() => Trading.pos));
+
+  /* 弹窗可拖动 (2026-10-23 用户要求: 弹窗会挡 K 线, 要能挪开对照着看) */
+  const dragInfo = await page.evaluate(() => {
+    const m = document.querySelector('#setupModal .modal');
+    return { cursor: getComputedStyle(m).cursor, bound: !!m._dragBound };
+  });
+  check('下单弹窗可拖动 (光标提示 move)', dragInfo.cursor === 'move' && dragInfo.bound,
+        `cursor=${dragInfo.cursor} bound=${dragInfo.bound}`);
+
+  const dRect = await page.evaluate(() => {
+    const b = document.querySelector('#setupModal .modal').getBoundingClientRect();
+    return { x: b.x, y: b.y, w: b.width };
+  });
+  const dx0 = dRect.x + dRect.w / 2, dy0 = dRect.y + 46;
+  await page.mouse.move(dx0, dy0);
+  await page.mouse.down();
+  await page.mouse.move(dx0 + 80, dy0 + 50, { steps: 5 });
+  await page.mouse.up();
+  await page.waitForTimeout(140);
+  const dTf = await page.evaluate(() => document.querySelector('#setupModal .modal').style.transform || '');
+  check('按住标题/空白处真的能把弹窗拖走 (80,50)',
+        /translate\(\s*80px\s*,\s*50px\s*\)/.test(dTf), dTf || '(空)');
+  /* 还原, 免得影响后面按坐标点弹窗里的东西 */
+  await page.evaluate(() => { document.querySelector('#setupModal .modal').style.transform = ''; });
   /* 弹窗 (v1.2): 左 = 全局参考库, 右 = 当前周期的清单 */
   const libN = await page.evaluate(() => document.querySelectorAll('#setupLib [data-lib]').length);
   check('弹窗左栏列出全局库全部 setup', libN === 23, libN + ' 个');
