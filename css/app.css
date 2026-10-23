@@ -580,6 +580,30 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
 }
 .bb-right { display: flex; align-items: center; gap: 9px; flex: none;
             font-variant-numeric: tabular-nums; }
+
+/* ---------- 底栏中间的「最近几天」日号条 ----------
+   用户 2026-10-23 要求: 底栏中间这块空白显示复盘刚过去几天的日号 (22 23 24),
+   有日报的那天加下划线并且能点开 —— 时间轴上那条 14px 的下划线太细, 分辨不出哪天有链接。 */
+#dayStrip {
+  display: flex; align-items: center; gap: 8px; flex: none;
+  height: 20px; padding: 0 4px;
+  font-size: 11px; color: var(--text-dim);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  transition: opacity .18s;
+}
+#dayStrip.hidden { opacity: 0; pointer-events: none; }
+#dayStrip .ds-day {
+  display: inline-block; line-height: 15px; padding: 0 1px;
+  color: var(--text-dim); text-decoration: none; border-bottom: 1px solid transparent;
+}
+/* 有日报 → 下划线 + 手型, 一眼看出哪天能点 */
+#dayStrip .ds-day.has-report {
+  color: var(--text); cursor: pointer; border-bottom-color: var(--accent);
+}
+#dayStrip .ds-day.has-report:hover { color: var(--accent); }
+/* 跨月分隔: 免得「31 1 2」看不出换月了 */
+#dayStrip .ds-sep { width: 1px; height: 11px; background: var(--border); flex: none; }
+
 #statusClock { color: var(--text-dim); }
 #statusSession { color: var(--text); font-weight: 600; }
 #statusAdj { color: var(--text-dim); }

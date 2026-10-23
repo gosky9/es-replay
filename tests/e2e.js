@@ -46,6 +46,9 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
       body: JSON.stringify({ version: 1, trades: [], orders: [] }) });
   });
   check('开始弹窗显示', await page.isVisible('#startModal'));
+  check('还没开始复盘时底栏日号条是隐藏的', await page.evaluate(() =>
+    document.getElementById('dayStrip').classList.contains('hidden')
+    && getComputedStyle(document.getElementById('dayStrip')).opacity === '0'));
 
   const theme0 = await page.evaluate(() => document.body.dataset.theme);
   const bg0 = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
@@ -294,9 +297,36 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   check('跟随态下新 bar 始终可见', allVisible, detail.join(' | '));
 
   /* 7. 下单 / 盈亏 / 平仓 */
+  /* 开仓前在绘制层上挂个 fillRect 探针: 用户 2026-10-23 要求去掉「入场→止盈 / 入场→止损」
+     那两块贯穿全宽的淡色底, 判据 = 持仓期间没有任何宽度 > 200px 的填充
+     (牌子/圆点/小方块都远小于这个宽度, 不会被误count) */
+  const probeOk = await page.evaluate(() => {
+    window.__fills = [];
+    const ctx = Draw.ctx;
+    if (!ctx.__probe) {
+      const orig = ctx.fillRect.bind(ctx);
+      ctx.fillRect = function (x, y, w, h) {
+        window.__fills.push([Math.round(x), Math.round(y), Math.round(w), Math.round(h)]);
+        return orig(x, y, w, h);
+      };
+      ctx.__probe = true;
+    }
+    ctx.fillRect(0, 100, 600, 30);            // 正对照: 探针确实是活的
+    const n = window.__fills.length;
+    window.__fills = [];
+    return n >= 1;
+  });
   await giveSetup(page);
   await page.click('#btnBuy');
   await page.waitForTimeout(250);
+  const wideFills = await page.evaluate(() => {
+    Draw.render();                            // 强制重画一帧, 把交易线画出来
+    return window.__fills.filter(f => f[2] > 200 && f[3] > 4);
+  });
+  check('开仓后盘面没有贯穿全宽的盈亏底色 (色区已去掉, 但线上/牌子还在)',
+        probeOk && wideFills.length === 0,
+        `探针=${probeOk} 宽填充=${JSON.stringify(wideFills)} 持仓=${await page.textContent('#stPos')}`);
+
   check('买入开仓', (await page.textContent('#stPos')).includes('多'),
         await page.textContent('#stPos') + ' 记录' + await page.textContent('#tradeCount'));
   check('成交标记', (await page.evaluate(() => ChartMgr.markers.length)) === 1);
@@ -427,6 +457,60 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   await page.waitForTimeout(500);
   const t6 = await page.textContent('#replayTime');
   check('自选起点=2024-03-15', t6.startsWith('2024-03-15'), t6);
+
+  /* 10b. 底栏日号条 (用户 2026-10-23 要求): 最近 5 个交易日的日号, 有日报的加下划线能点,
+         跨月处一根竖线。挑 2015-04-27 起的一段: 27/28 没日报、29/30 和 5-01 有日报,
+         而且 4 月 → 5 月刚好跨界, 三个特性一次都验到。 */
+  await page.click('#replayPillBtn');
+  await page.waitForTimeout(120);
+  await page.click('#modeSeg button[data-mode="custom"]');
+  await page.fill('#startDate', '2015-04-27');
+  await page.fill('#startTime', '09:35');
+  await page.click('#startBtn');
+  await waitLoaded(page);
+  await page.waitForTimeout(500);
+  await page.evaluate(() => {
+    App.engine.pause();
+    let best = -1;
+    App.engine.bars.forEach((b, i) => {
+      if (etDateStr(b.epoch, b.off) === '2015-05-01' && etParts(b.epoch, b.off).hh === 11) best = i;
+    });
+    if (best > 0) App.engine.seek(best);
+  });
+  await page.waitForTimeout(250);
+  const strip = await page.evaluate(() => {
+    const kids = [...document.getElementById('dayStrip').children];
+    return {
+      hidden: document.getElementById('dayStrip').classList.contains('hidden'),
+      seq: kids.map(c => (c.classList.contains('ds-sep') ? '|'
+        : (c.classList.contains('has-report') ? '*' : '') + c.textContent)).join(' '),
+      days: kids.filter(c => c.classList.contains('ds-day')).map(c => {
+        const st = getComputedStyle(c);
+        return {
+          t: c.textContent, tag: c.tagName,
+          has: c.classList.contains('has-report'),
+          /* 下划线: 所有日号都带 1px 底边(用 transparent 占位保持基线一致),
+             所以判据不是"宽度>0"而是"底边颜色不透明" */
+          ul: parseFloat(st.borderBottomWidth) > 0 && st.borderBottomColor !== 'rgba(0, 0, 0, 0)',
+          cur: st.cursor,
+          href: c.getAttribute('href') || '',
+          target: c.getAttribute('target') || '',
+          rel: c.getAttribute('rel') || '',
+        };
+      }),
+      at: document.getElementById('replayTime').textContent,
+    };
+  });
+  check('底栏日号条 = 最近 5 个交易日的日号, 跨月处一根竖线',
+        !strip.hidden && strip.seq === '27 28 *29 *30 | *1',
+        `[${strip.at}] 实际 "${strip.seq}"`);
+  check('日号条: 有日报的加下划线且是能点的新标签链接 (*), 没日报的不可点',
+        strip.days.length === 5
+        && strip.days.every(d => d.has === d.ul)                       // 下划线与"有日报"严格一致
+        && strip.days.filter(d => d.has).every(d => d.tag === 'A' && d.target === '_blank'
+             && /^https:\/\//.test(d.href) && /noopener/.test(d.rel) && d.cur === 'pointer')
+        && strip.days.filter(d => !d.has).every(d => d.tag === 'SPAN' && d.cur === 'auto'),
+        JSON.stringify(strip.days.map(d => d.t + ':' + d.tag + (d.has ? '*' : ''))));
 
   /* 11. 随机复盘 + 会话重置 (弹窗现在默认「继续上次」, 这里明确选随机) */
   await page.click('#replayPillBtn');

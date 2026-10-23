@@ -1190,16 +1190,10 @@ const Draw = {
     const yTp = (pos !== 0 && Trading.tp != null) ? this.yOf(Trading.tp) : null;
     const ySl = (pos !== 0 && Trading.sl != null) ? this.yOf(Trading.sl) : null;
 
-    // 1) 盈利/亏损区: 入场→止盈 淡绿, 入场→止损 淡橙
-    const zone = (y1, y2, color) => {
-      if (y1 == null || y2 == null) return;
-      ctx.save();
-      ctx.fillStyle = this.alpha(color, .10);
-      ctx.fillRect(0, Math.min(y1, y2), plotR, Math.abs(y2 - y1));
-      ctx.restore();
-    };
-    zone(yEntry, yTp, '#089981');
-    zone(yEntry, ySl, '#ff9800');
+    /* 1) 盈亏色区 (入场→止盈 淡绿 / 入场→止损 淡橙) 已按用户 2026-10-23 要求整块去掉:
+       持仓期间那两块底色一直铺在盘面上, 影响观感和判断。
+       这是**主动偏离 TradingView** 的一处 (原版有, 见 reference/16-TV-双边盈亏区-2026-10-21.png),
+       用户明确要求去掉, 不是 bug。TP/SL 的线、右侧圆点、牌子都照旧。 */
 
     // 2) 各条价格线
     for (const o of list) {

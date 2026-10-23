@@ -65,7 +65,10 @@ const App = {
     this.startClock();
     // 日报索引 (时间轴日期跳转): 后台拉, 拉到就补一帧, 把有日报的日期标记画出来
     if (typeof Reports !== 'undefined') {
-      Reports.load().then(() => { try { Draw.render(); } catch (e) { /* 还没建图, 无所谓 */ } });
+      Reports.load().then(() => {
+        try { Draw.render(); } catch (e) { /* 还没建图, 无所谓 */ }
+        try { this.renderDayStrip(); } catch (e) { /* 同上 */ }   // 日报到了, 日号条要补下划线
+      });
     }
     // 提示气泡要贴着鼠标走, 记一下最后位置
     window.addEventListener('mousemove', e => { this._mx = e.clientX; this._my = e.clientY; }, { passive: true });
@@ -610,6 +613,7 @@ const App = {
     document.getElementById('startModal').style.display = 'none';
     if (!this.engine) {
       document.getElementById('replayBar').classList.add('hidden');
+      this.renderDayStrip();                 // 没引擎了, 日号条跟着藏
       this.toast('还没开始复盘 · 点图例左侧的 ◀◀ 可以重新选');
       return;
     }
@@ -923,6 +927,7 @@ const App = {
     ChartMgr.setData([]);
     ChartMgr.setMarkers([]);
     document.getElementById('replayBar').classList.add('hidden');
+    this.renderDayStrip();                   // 没引擎了, 日号条跟着藏
     document.getElementById('startModal').style.display = 'flex';
     this.toast('已结束复盘');
   },
@@ -969,7 +974,79 @@ const App = {
     document.getElementById('replayTime').textContent = etTimeStr(cur.epoch, cur.off);
     document.getElementById('barCount').textContent = `${e.played} / ${e.total}`;
     document.getElementById('replayBar').classList.toggle('playing', e.playing);
+    this.renderDayStrip();
     this.onLegendIdle();
+  },
+
+  /** 底栏中间的「最近几天」日号条 (用户 2026-10-23 要求)
+   *  显示复盘刚走过的最后 n 个交易日 (如 22 23 24); 有日报的那天加下划线, 能点开新标签页。
+   *  为什么单独做一条: 时间轴上已有的那条下划线只有 14px 宽、贴着轴底, 分辨不出哪天有链接。
+   *
+   *  取"走过的最后 n 个不同 ET 日期"而不是"往前数 n 个自然日":
+   *  周末/节假日会在条上留空洞 (周五 24 → 周一 27 中间空两格), 按走过的 K 线取就没有。
+   *  日期口径跟 Draw.dateAtX 一致 (自然日 etDateStr, 不是 CME 交易日), 否则同一天两处会对不上。
+   */
+  renderDayStrip(n = 5) {
+    const el = document.getElementById('dayStrip');
+    if (!el) return;
+    /* 没有进行中的复盘 → 整条隐藏, 跟 #replayBar 的显隐同步 */
+    const e = this.engine;
+    if (!e || !e.bars || !e.bars.length) {
+      el.classList.add('hidden');
+      if (el.firstChild) el.textContent = '';
+      this._dayStripSig = '';
+      return;
+    }
+    el.classList.remove('hidden');
+
+    const idx = Math.min(e.idx, e.bars.length - 1);
+    const days = [];
+    for (let i = idx; i >= 0 && days.length < n; i--) {      // 从当前这根往回走
+      const b = e.bars[i];
+      const d = etDateStr(b.epoch, b.off);
+      if (!days.length || days[days.length - 1] !== d) days.push(d);   // 倒着相邻去重
+    }
+    days.reverse();                        // 老的排左边: 22 23 24
+
+    /* 每根 K 线都会走一遍这里, 只有「日期集合 / 日报是否已加载」变了才重建 DOM,
+       否则 30x 播放时会每秒重建几十次 */
+    const sig = days.join(',') + '|' + (typeof Reports !== 'undefined' && Reports.ready() ? Reports.size() : -1);
+    if (sig === this._dayStripSig) return;
+    this._dayStripSig = sig;
+
+    const ready = (typeof Reports !== 'undefined') && Reports.ready();
+    const frag = document.createDocumentFragment();
+    days.forEach((d, i) => {
+      /* 换月就在前面插一根竖线 */
+      if (i > 0 && d.slice(5, 7) !== days[i - 1].slice(5, 7)) {
+        const sep = document.createElement('span');
+        sep.className = 'ds-sep';
+        frag.appendChild(sep);
+      }
+      const num = String(+d.slice(8, 10));          // "08" → "8"
+      const r = ready ? Reports.get(d) : null;
+      if (!r) {
+        const s = document.createElement('span');
+        s.className = 'ds-day';
+        s.textContent = num;
+        s.title = d;                                // 没日报的也给个完整日期提示
+        frag.appendChild(s);
+        return;
+      }
+      const a = document.createElement('a');
+      a.className = 'ds-day has-report';
+      a.href = r.u;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = num;
+      a.title = `${d} · ${r.t || r.u}`;
+      /* 按下就 preventDefault, 不让它拿到焦点: 焦点落在链接上时空格会"点链接"
+         而不是播放/暂停 (键盘处理只挡了 INPUT/SELECT, 不挡 A) */
+      a.addEventListener('mousedown', ev => { if (ev.button === 0) ev.preventDefault(); });
+      frag.appendChild(a);
+    });
+    el.textContent = '';
+    el.appendChild(frag);
   },
 
   /** 美元 → 点 (ES: 1 点 = $50)。右侧面板/交易记录的所有盈亏都走这里
