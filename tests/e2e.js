@@ -458,9 +458,48 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   const t6 = await page.textContent('#replayTime');
   check('自选起点=2024-03-15', t6.startsWith('2024-03-15'), t6);
 
-  /* 10b. 底栏日号条 (用户 2026-10-23 要求): 最近 5 个交易日的日号, 有日报的加下划线能点,
-         跨月处一根竖线。挑 2015-04-27 起的一段: 27/28 没日报、29/30 和 5-01 有日报,
-         而且 4 月 → 5 月刚好跨界, 三个特性一次都验到。 */
+  /* 10b. 底栏日号条 = 「上周一~周五」+ 竖线 + 「本周一~周五」固定 10 格 (用户 2026-10-24)。
+         核心是「位置即周几」: 一组第一格永远是周一、第五格永远是周五。
+         判据用符号串: *数字 = 有日报(深色500可点), 数字 = 无日报(灰), c = 休市(居中横杠),
+         f = 还没走到(靠下横杠), | = 两周之间的竖线。 */
+  const stripDump = () => page.evaluate(() => {
+    const kids = [...document.getElementById('dayStrip').children];
+    return {
+      hidden: document.getElementById('dayStrip').classList.contains('hidden'),
+      seq: kids.map(c => {
+        if (c.classList.contains('ds-sep')) return '|';
+        if (c.classList.contains('ds-cell')) return c.classList.contains('future') ? 'f' : 'c';
+        return (getComputedStyle(c).fontWeight === '500' ? '*' : '') + c.textContent;
+      }).join(' '),
+      days: kids.filter(c => c.classList.contains('ds-day')).map(c => {
+        const st = getComputedStyle(c);
+        return {
+          t: c.textContent, tag: c.tagName, w: st.fontWeight, color: st.color, cur: st.cursor,
+          has: c.classList.contains('has-report'),
+          href: c.getAttribute('href') || '', target: c.getAttribute('target') || '',
+          rel: c.getAttribute('rel') || '',
+        };
+      }),
+      gaps: kids.filter(c => c.classList.contains('ds-cell')).map(c => {
+        const bar = c.querySelector('.ds-bar');
+        const r = bar.getBoundingClientRect();
+        return { kind: c.classList.contains('future') ? 'f' : 'c',
+          bg: getComputedStyle(bar).backgroundColor,
+          top: +r.top.toFixed(1), h: +r.height.toFixed(1), w: +r.width.toFixed(1) };
+      }),
+      at: document.getElementById('replayTime').textContent,
+    };
+  });
+  const seekTo = (date, hh = 11) => page.evaluate(([d, h]) => {
+    App.engine.pause();
+    let best = -1;
+    App.engine.bars.forEach((b, i) => {
+      if (etDateStr(b.epoch, b.off) === d && etParts(b.epoch, b.off).hh === h) best = i;
+    });
+    if (best > 0) App.engine.seek(best);
+    return best;
+  }, [date, hh]);
+
   await page.click('#replayPillBtn');
   await page.waitForTimeout(120);
   await page.click('#modeSeg button[data-mode="custom"]');
@@ -469,48 +508,47 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   await page.click('#startBtn');
   await waitLoaded(page);
   await page.waitForTimeout(500);
-  await page.evaluate(() => {
-    App.engine.pause();
-    let best = -1;
-    App.engine.bars.forEach((b, i) => {
-      if (etDateStr(b.epoch, b.off) === '2015-05-01' && etParts(b.epoch, b.off).hh === 11) best = i;
-    });
-    if (best > 0) App.engine.seek(best);
-  });
+
+  /* (1) 今天=2015-05-01 周五: 上周 4/20~24 全有日报, 本周 27 28 没日报、29 30 1 有 */
+  await seekTo('2015-05-01');
   await page.waitForTimeout(250);
-  const strip = await page.evaluate(() => {
-    const kids = [...document.getElementById('dayStrip').children];
-    return {
-      hidden: document.getElementById('dayStrip').classList.contains('hidden'),
-      seq: kids.map(c => (c.classList.contains('ds-sep') ? '|'
-        : (c.classList.contains('has-report') ? '*' : '') + c.textContent)).join(' '),
-      days: kids.filter(c => c.classList.contains('ds-day')).map(c => {
-        const st = getComputedStyle(c);
-        return {
-          t: c.textContent, tag: c.tagName,
-          has: c.classList.contains('has-report'),
-          /* 下划线: 所有日号都带 1px 底边(用 transparent 占位保持基线一致),
-             所以判据不是"宽度>0"而是"底边颜色不透明" */
-          ul: parseFloat(st.borderBottomWidth) > 0 && st.borderBottomColor !== 'rgba(0, 0, 0, 0)',
-          cur: st.cursor,
-          href: c.getAttribute('href') || '',
-          target: c.getAttribute('target') || '',
-          rel: c.getAttribute('rel') || '',
-        };
-      }),
-      at: document.getElementById('replayTime').textContent,
-    };
-  });
-  check('底栏日号条 = 最近 5 个交易日的日号, 跨月处一根竖线',
-        !strip.hidden && strip.seq === '27 28 *29 *30 | *1',
+  const strip = await stripDump();
+  check('日号条 = 上周 5 格 + 竖线 + 本周 5 格 (位置即周几)',
+        !strip.hidden && strip.seq === '*20 *21 *22 *23 *24 | 27 28 *29 *30 *1',
         `[${strip.at}] 实际 "${strip.seq}"`);
-  check('日号条: 有日报的加下划线且是能点的新标签链接 (*), 没日报的不可点',
-        strip.days.length === 5
-        && strip.days.every(d => d.has === d.ul)                       // 下划线与"有日报"严格一致
-        && strip.days.filter(d => d.has).every(d => d.tag === 'A' && d.target === '_blank'
+  check('日号条: 有日报=深色+500字重+新标签链接; 没日报=灰色400不可点',
+        strip.days.length === 10
+        && strip.days.filter(d => d.has).every(d => d.tag === 'A' && d.w === '500'
+             && d.color === 'rgb(19, 23, 34)' && d.target === '_blank'
              && /^https:\/\//.test(d.href) && /noopener/.test(d.rel) && d.cur === 'pointer')
-        && strip.days.filter(d => !d.has).every(d => d.tag === 'SPAN' && d.cur === 'auto'),
-        JSON.stringify(strip.days.map(d => d.t + ':' + d.tag + (d.has ? '*' : ''))));
+        && strip.days.filter(d => !d.has).every(d => d.tag === 'SPAN' && d.w === '400'
+             && d.color === 'rgb(120, 123, 134)' && !d.href && d.cur === 'auto'),
+        JSON.stringify(strip.days.map(d => d.t + ':' + d.tag + ':' + d.w)));
+
+  /* (2) 今天=2015-12-28 周一: 上周五 12/25 圣诞休市(当时没有 K 线) → 居中横杠;
+         本周 12/29~1/1 还没走到 → 靠下横杠。
+         注意必须另起一段: 上一段的加载窗口只到 6 月中旬, 里面没有 12 月。 */
+  await page.click('#replayPillBtn');
+  await page.waitForTimeout(120);
+  await page.click('#modeSeg button[data-mode="custom"]');
+  await page.fill('#startDate', '2015-12-14');
+  await page.fill('#startTime', '09:35');
+  await page.click('#startBtn');
+  await waitLoaded(page);
+  await page.waitForTimeout(500);
+  await seekTo('2015-12-28');
+  await page.waitForTimeout(250);
+  const strip2 = await stripDump();
+  check('日号条: 休市=居中横杠, 还没走到=靠下横杠 (位置 + 深浅双区分)',
+        strip2.seq === '*21 *22 *23 24 c | *28 f f f f', `[${strip2.at}] 实际 "${strip2.seq}"`);
+  const closed = strip2.gaps.find(g => g.kind === 'c');
+  const fut = strip2.gaps.find(g => g.kind === 'f');
+  check('未到的横杠比休市低约 6px, 而且颜色更淡',
+        !!closed && !!fut && (fut.top - closed.top) >= 4
+        && fut.bg !== closed.bg && fut.w === 9 && closed.w === 9,
+        closed && fut
+          ? `休市 top=${closed.top} ${closed.bg} / 未到 top=${fut.top} ${fut.bg}`
+          : '没找到横杠');
 
   /* 11. 随机复盘 + 会话重置 (弹窗现在默认「继续上次」, 这里明确选随机) */
   await page.click('#replayPillBtn');

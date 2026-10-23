@@ -581,9 +581,10 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
 .bb-right { display: flex; align-items: center; gap: 9px; flex: none;
             font-variant-numeric: tabular-nums; }
 
-/* ---------- 底栏中间的「最近几天」日号条 ----------
-   用户 2026-10-23 要求: 底栏中间这块空白显示复盘刚过去几天的日号 (22 23 24),
-   有日报的那天加下划线并且能点开 —— 时间轴上那条 14px 的下划线太细, 分辨不出哪天有链接。 */
+/* ---------- 底栏中间的「上周 + 本周」日号条 ----------
+   用户 2026-10-24: 分不清是周几 → 用「位置即周几」解决:
+   固定 5 列一组, 第一格永远是周一、第五格永远是周五, 不写字就能认。
+   同一格里还能有三种状态, 靠符号区分 (见 js/app.js 的 renderDayStrip 注释)。 */
 #dayStrip {
   display: flex; align-items: center; gap: 8px; flex: none;
   height: 20px; padding: 0 4px;
@@ -592,17 +593,26 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
   transition: opacity .18s;
 }
 #dayStrip.hidden { opacity: 0; pointer-events: none; }
-#dayStrip .ds-day {
-  display: inline-block; line-height: 15px; padding: 0 1px;
-  color: var(--text-dim); text-decoration: none; border-bottom: 1px solid transparent;
+/* 每格固定宽 → 空格子也占位, 一组 5 列永远对得齐 */
+#dayStrip .ds-day,
+#dayStrip .ds-cell {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 15px; height: 20px; flex: none; text-decoration: none;
 }
-/* 有日报 → 下划线 + 手型, 一眼看出哪天能点 */
-#dayStrip .ds-day.has-report {
-  color: var(--text); cursor: pointer; border-bottom-color: var(--accent);
+#dayStrip .ds-day { font-size: 11px; color: var(--text-dim); }
+/* 有日报 = 深色 + 500 字重 + 手型可点。500 不是随便挑的: Windows 的 Segoe UI 在这个字号下
+   500 已经落到更粗的那张字面上 (实测墨量 860 → 1241, +44%), 而 600 与 500 像素级一致。 */
+#dayStrip a.ds-day { color: var(--text); font-weight: 500; cursor: pointer; }
+#dayStrip a.ds-day:hover { color: var(--accent); }
+/* 休市 = 居中横杠; 未到 = 靠下横杠 (差 6px) + 再淡一档, 位置和深浅双保险 */
+#dayStrip .ds-bar {
+  display: block; width: 9px; height: 2px; border-radius: 1px;
+  background: var(--border-strong);
 }
-#dayStrip .ds-day.has-report:hover { color: var(--accent); }
-/* 跨月分隔: 免得「31 1 2」看不出换月了 */
-#dayStrip .ds-sep { width: 1px; height: 11px; background: var(--border); flex: none; }
+#dayStrip .ds-cell.future { align-items: flex-end; padding-bottom: 2px; }
+#dayStrip .ds-cell.future .ds-bar { background: var(--border); }
+/* 上周 / 本周的分隔线 (跨月不再标, 用户 2026-10-24 明确不要) */
+#dayStrip .ds-sep { width: 1px; height: 13px; background: var(--border-strong); flex: none; }
 
 #statusClock { color: var(--text-dim); }
 #statusSession { color: var(--text); font-weight: 600; }

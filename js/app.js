@@ -67,7 +67,7 @@ const App = {
     if (typeof Reports !== 'undefined') {
       Reports.load().then(() => {
         try { Draw.render(); } catch (e) { /* 还没建图, 无所谓 */ }
-        try { this.renderDayStrip(); } catch (e) { /* 同上 */ }   // 日报到了, 日号条要补下划线
+        try { this.renderDayStrip(); } catch (e) { /* 同上 */ }   // 日报到了, 日号条要改成深色可点
       });
     }
     // 提示气泡要贴着鼠标走, 记一下最后位置
@@ -978,15 +978,21 @@ const App = {
     this.onLegendIdle();
   },
 
-  /** 底栏中间的「最近几天」日号条 (用户 2026-10-23 要求)
-   *  显示复盘刚走过的最后 n 个交易日 (如 22 23 24); 有日报的那天加下划线, 能点开新标签页。
-   *  为什么单独做一条: 时间轴上已有的那条下划线只有 14px 宽、贴着轴底, 分辨不出哪天有链接。
+  /** 底栏日号条: 「上周一~周五」+ 竖线 + 「本周一~周五」= 固定 10 格 (用户 2026-10-24 口径)
    *
-   *  取"走过的最后 n 个不同 ET 日期"而不是"往前数 n 个自然日":
-   *  周末/节假日会在条上留空洞 (周五 24 → 周一 27 中间空两格), 按走过的 K 线取就没有。
-   *  日期口径跟 Draw.dateAtX 一致 (自然日 etDateStr, 不是 CME 交易日), 否则同一天两处会对不上。
+   *  为什么固定 5 列: 这样「位置即周几」—— 一组里的第一格永远是周一、第五格永远是周五,
+   *  不写"一/二/三"也能认出周几 (用户的诉求就是"分不清是周几")。
+   *  格子用三种符号区分状态, 不加文字:
+   *    数字      那天有 K 线 (深色 + 500 字重 = 有日报可点; 灰色 = 没有日报)
+   *    居中横杠  休市 —— 该有交易、也已经在今天之前, 却没有 K 线
+   *    靠下横杠  还没走到 —— 本周里排在今天的后面
+   *  两种横杠只差 6px 高度, 所以再叠一档颜色 (休市 --border-strong / 未到 --border) 做双保险。
+   *
+   *  跨月不标 (周五 30 接周一 1 本身看得出来); 窄屏也不降级, 永远 10 格。
+   *  "天"用 CME 交易日 (18:00 ET 换日): ETH 时段周日晚的 bar 归进周一那格, 正好对上网格;
+   *  RTH 不跨 18:00, 跟自然日完全一致。
    */
-  renderDayStrip(n = 5) {
+  renderDayStrip() {
     const el = document.getElementById('dayStrip');
     if (!el) return;
     /* 没有进行中的复盘 → 整条隐藏, 跟 #replayBar 的显隐同步 */
@@ -999,39 +1005,40 @@ const App = {
     }
     el.classList.remove('hidden');
 
-    const idx = Math.min(e.idx, e.bars.length - 1);
-    const days = [];
-    for (let i = idx; i >= 0 && days.length < n; i--) {      // 从当前这根往回走
-      const b = e.bars[i];
-      const d = etDateStr(b.epoch, b.off);
-      if (!days.length || days[days.length - 1] !== d) days.push(d);   // 倒着相邻去重
-    }
-    days.reverse();                        // 老的排左边: 22 23 24
-
-    /* 每根 K 线都会走一遍这里, 只有「日期集合 / 日报是否已加载」变了才重建 DOM,
-       否则 30x 播放时会每秒重建几十次 */
-    const sig = days.join(',') + '|' + (typeof Reports !== 'undefined' && Reports.ready() ? Reports.size() : -1);
+    const d = this._dayStripData();
+    const ready = (typeof Reports !== 'undefined') && Reports.ready();
+    /* 每根 K 线都会走一遍: 只有「格子状态 / 日报是否已加载」变了才重建 DOM,
+       否则 30x 播放时每秒重建几十次 */
+    const sig = d.slots.map(s => s.kind + ':' + s.key).join(',') + '|' + (ready ? Reports.size() : -1);
     if (sig === this._dayStripSig) return;
     this._dayStripSig = sig;
 
-    const ready = (typeof Reports !== 'undefined') && Reports.ready();
     const frag = document.createDocumentFragment();
-    days.forEach((d, i) => {
-      /* 换月就在前面插一根竖线 */
-      if (i > 0 && d.slice(5, 7) !== days[i - 1].slice(5, 7)) {
+    for (const s of d.slots) {
+      if (s.kind === 'sep') {
         const sep = document.createElement('span');
         sep.className = 'ds-sep';
         frag.appendChild(sep);
+        continue;
       }
-      const num = String(+d.slice(8, 10));          // "08" → "8"
-      const r = ready ? Reports.get(d) : null;
+      if (s.kind === 'blank') continue;               // 窗口里没有这段数据 → 什么都不画
+      if (s.kind === 'closed' || s.kind === 'future') {
+        const c = document.createElement('span');
+        c.className = 'ds-cell ' + s.kind;
+        c.appendChild(document.createElement('span')).className = 'ds-bar';
+        c.title = (s.kind === 'closed' ? s.key + ' 休市' : s.key + ' 还没走到');
+        frag.appendChild(c);
+        continue;
+      }
+      const num = String(+s.key.slice(8, 10));        // "08" → "8"
+      const r = ready ? Reports.get(s.key) : null;
       if (!r) {
-        const s = document.createElement('span');
-        s.className = 'ds-day';
-        s.textContent = num;
-        s.title = d;                                // 没日报的也给个完整日期提示
-        frag.appendChild(s);
-        return;
+        const t = document.createElement('span');
+        t.className = 'ds-day';
+        t.textContent = num;
+        t.title = s.key;                              // 没日报的也给完整日期
+        frag.appendChild(t);
+        continue;
       }
       const a = document.createElement('a');
       a.className = 'ds-day has-report';
@@ -1039,14 +1046,78 @@ const App = {
       a.target = '_blank';
       a.rel = 'noopener';
       a.textContent = num;
-      a.title = `${d} · ${r.t || r.u}`;
-      /* 按下就 preventDefault, 不让它拿到焦点: 焦点落在链接上时空格会"点链接"
-         而不是播放/暂停 (键盘处理只挡了 INPUT/SELECT, 不挡 A) */
+      a.title = s.key + ' · ' + (r.t || r.u);
+      /* 按下就 preventDefault, 不让它拿到焦点: 焦点落到链接上时空格会"点链接"
+         而不是播放/暂停 (键盘那条只挡 INPUT/SELECT, 不挡 A) */
       a.addEventListener('mousedown', ev => { if (ev.button === 0) ev.preventDefault(); });
       frag.appendChild(a);
-    });
+    }
     el.textContent = '';
     el.appendChild(frag);
+  },
+
+  /** 算出日号条要画的格子: [{kind:'day'|'closed'|'future'|'blank'|'sep', key}]
+   *  按 (窗口起点, 当前交易日) 缓存 —— 同一交易日内每根 K 线重走几千根太浪费;
+   *  这两个键不变时, "哪些交易日在窗口里"也一定不变 (往后走同一天不增加新的日子)。 */
+  _dayStripData() {
+    const e = this.engine;
+    const bars = e.bars;
+    const idx = Math.min(e.idx, bars.length - 1);
+    const cur = bars[idx];
+    const curKey = cmTradingDay(cur.epoch, cur.off);
+    const firstEp = bars[0].epoch;
+    const cache = this._dayCache;
+    if (cache && cache.firstEp === firstEp && cache.curKey === curKey) return cache.data;
+
+    const day = k => new Date(k + 'T00:00:00Z');
+    const iso = dt => dt.toISOString().slice(0, 10);
+    /* 某个日期所在那一周的周一; back=1 就是上一周 */
+    const mondayOf = (k, back) => {
+      const dt = day(k);
+      const wd = (dt.getUTCDay() + 6) % 7;            // 0=周一 .. 6=周日
+      dt.setUTCDate(dt.getUTCDate() - wd - back * 7);
+      return iso(dt);
+    };
+    const addDays = (k, n) => { const dt = day(k); dt.setUTCDate(dt.getUTCDate() + n); return iso(dt); };
+
+    const thisMon = mondayOf(curKey, 0);
+    const lastMon = mondayOf(curKey, 1);
+
+    /* 窗口里"已经走到"的交易日 (只算 bars[0..idx])。
+       注意不能算 idx 之后的 bar —— 那些已经加载好但还没播, 算进来"未到"的日子会变有数据。 */
+    const firstKey = cmTradingDay(bars[0].epoch, bars[0].off);
+    const present = new Set();
+    for (let i = idx; i >= 0; i--) {
+      const b = bars[i];
+      const k = cmTradingDay(b.epoch, b.off);
+      present.add(k);
+      if (k <= lastMon) break;                       // 走过上周一就够, 再往前不用看
+    }
+
+    const week = mon => {
+      const out = [];
+      for (let n = 0; n < 5; n++) {
+        const key = addDays(mon, n);
+        let kind;
+        if (key > curKey) kind = 'future';           // 本周里排在今天之后
+        else if (present.has(key)) kind = 'day';
+        else if (key < firstKey) kind = 'blank';     // 窗口没覆盖这段 (复盘起点附近)
+        else kind = 'closed';                        // 该有交易却没有 → 休市
+        out.push({ kind, key });
+      }
+      return out;
+    };
+    const lastWk = week(lastMon);
+    const thisWk = week(thisMon);
+
+    const slots = [];
+    /* 上周整段都没数据 (起点就在本周) → 连竖线一起省掉, 免得"5 个空格 + 一根线"很怪 */
+    if (lastWk.some(s => s.kind !== 'blank')) slots.push(...lastWk, { kind: 'sep', key: '' });
+    slots.push(...thisWk);
+
+    const data = { slots, curKey, thisMon };
+    this._dayCache = { firstEp, curKey, data };
+    return data;
   },
 
   /** 美元 → 点 (ES: 1 点 = $50)。右侧面板/交易记录的所有盈亏都走这里
