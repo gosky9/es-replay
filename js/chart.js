@@ -32,6 +32,16 @@ const BarCountPrimitive = {
 /** Bar Count 数字顶端与 K 线最低点的垂直间距 (CSS px), 实测 reference/20 = 48.8 device / 2 */
 const BARCOUNT_GAP = 24.4;
 
+/* Bar Count 数字层缓存 ----------------------------------------------------
+   drawBarCounts 挂在库的渲染管线里, 鼠标每移动一次就整幅重画一遍:
+   150 根可见 K 线各算一次 priceToCoordinate/logicalToCoordinate, 再画 40~50 个 fillText。
+   fillText 是 canvas 2D 里最贵的操作之一; 在 DPR 1.75 的 2195×1147 窗口(位图 3140×1820)下,
+   用户实测移动鼠标时有 4.7% 的帧掉到 33ms (26/555 帧, 静止时 0 次)。
+   但光标移动时视窗并没有变, 这一层的内容完全一样 —— 所以按指纹缓存整层位图,
+   命中就只做一次 drawImage(blit), 视窗/价格轴/主题变了才重画。
+   视觉零变化: 还是同一段绘制代码, 只是不再每帧重复做字形光栅化。 */
+let _bcLayer = null, _bcKey = '';
+
 function drawBarCounts(target) {
   if (typeof Draw !== 'undefined' && !Draw.showBarCount) return;
   const bars = ChartMgr._lastData;
@@ -54,21 +64,46 @@ function drawBarCounts(target) {
   if (i1 < i0) return;
 
   const dark = ChartMgr.theme === 'dark';
+
   target.useBitmapCoordinateSpace(scope => {
     const ctx = scope.context;
     const hrp = scope.horizontalPixelRatio, vpr = scope.verticalPixelRatio;
-    const H = scope.bitmapSize.height / vpr;          // 画布高度(CSS px)
-    ctx.save();
-    ctx.scale(hrp, vpr);                             // 之后按 CSS px 画
+    const bwRaw = scope.bitmapSize.width, bhRaw = scope.bitmapSize.height;
+    const bw = Math.round(bwRaw), bh = Math.round(bhRaw);
+    const H = bhRaw / vpr;                  // 画布高度(CSS px), 用未取整的值免得数字位移
+
+    /* 指纹: 视窗 + 纵向缩放 + 画布尺寸 + 主题 + 数据长度 + 显示密度。
+       价格轴(纵向)没有任何订阅回调, 拿两根可见 K 线最低点的屏幕 y 当指纹。 */
+    const ya = series.priceToCoordinate(bars[i0].l);
+    const yb = series.priceToCoordinate(bars[i1].l);
+    const key = [lr.from.toFixed(2), lr.to.toFixed(2), ya, yb,
+      bw, bh, dark ? 'd' : 'l', bars.length, every].join('|');
+
+    if (_bcLayer && _bcKey === key && _bcLayer.width === bw && _bcLayer.height === bh) {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);   // 位图坐标系, 1:1 贴回去
+      ctx.drawImage(_bcLayer, 0, 0);
+      ctx.restore();
+      return;
+    }
+
+    if (!_bcLayer || _bcLayer.width !== bw || _bcLayer.height !== bh) {
+      _bcLayer = document.createElement('canvas');
+      _bcLayer.width = bw; _bcLayer.height = bh;
+    }
+    const c = _bcLayer.getContext('2d');
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.clearRect(0, 0, bw, bh);
+    c.scale(hrp, vpr);                      // 之后按 CSS px 画
     // 照 reference/20 逐像素标定: 数字墨迹高 15 device px (=7.5 CSS), 字干 2 device px
     //   → 常规字重(400) 11px; 数字中心与 K 线中心对齐
-    ctx.font = '400 11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillStyle = dark ? '#ffab40' : '#ff9800';     // TV 的 Bar Count 是橙色 rgb(255,152,0)
+    c.font = '400 11px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+    c.textAlign = 'center';
+    c.textBaseline = 'alphabetic';
+    c.fillStyle = dark ? '#ffab40' : '#ff9800';     // TV 的 Bar Count 是橙色 rgb(255,152,0)
     // 数字顶端距 K 线最低点固定 24.4 CSS px (10 根样本 48~50 device px, 与蜡烛形状无关)。
     // 用字形真实高度把"顶端"换算成 baseline, 免得不同字体基线位置不一样
-    const capH = ctx.measureText('0').actualBoundingBoxAscent || 7.5;
+    const capH = c.measureText('0').actualBoundingBoxAscent || 7.5;
     for (let i = i0; i <= i1; i++) {
       const b = bars[i];
       const n = b && b.dayNo;
@@ -78,8 +113,14 @@ function drawBarCounts(target) {
       if (y == null || y < 0 || y > H - 12) continue;
       const x = ts.logicalToCoordinate(i);
       if (x == null) continue;
-      ctx.fillText(String(n), x, y + BARCOUNT_GAP + capH);  // 不再描边: TV 就是纯色字
+      c.fillText(String(n), x, y + BARCOUNT_GAP + capH);  // 不再描边: TV 就是纯色字
     }
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    _bcKey = key;
+
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(_bcLayer, 0, 0);
     ctx.restore();
   });
 }
@@ -388,8 +429,10 @@ const ChartMgr = {
     try { return this.chart.timeScale().getVisibleLogicalRange(); } catch (e) { return null; }
   },
 
-  /** Bar Count 开关/配色变化后重画一帧 */
-  refreshBarCount() { BarCountPrimitive.refresh(); },
+  /** Bar Count 开关/配色变化后重画一帧
+   *  必须同时作废层缓存: 这个方法的语义就是"内容变了, 强制重画一遍",
+   *  而缓存按"视窗+价格轴+主题"做指纹, 开关配色这类变化它未必能察觉。 */
+  refreshBarCount() { _bcLayer = null; _bcKey = ''; BarCountPrimitive.refresh(); },
 
   /**
    * 全量替换数据
