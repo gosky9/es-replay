@@ -172,8 +172,12 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
 .dbtn.active:hover { filter: brightness(1.08); }
 .dsep { width: 1px; height: 16px; background: var(--border); margin: 0 5px; flex: none; }
 
-/* 图表区 (相对定位容器) */
-#chartArea { flex: 1; position: relative; min-height: 0; }
+/* 图表区 (相对定位容器)
+   光标 = 系统十字指针 (TradingView 的行为, 用户 2026-10-23 指出):
+   cursor 可继承, 所以 7 层 canvas 都会跟着变十字; 右侧价格轴库自己设了
+   ns-resize(上下双箭头), 会覆盖继承值, 那正是原版的样子, 不用管。
+   draw.js 里"悬停有日报的日期"那段会临时设 pointer, 移开后设回 '' → 回到这里的十字。 */
+#chartArea { flex: 1; position: relative; min-height: 0; cursor: crosshair; }
 #chartMain { position: absolute; inset: 0; }
 #drawLayer { position: absolute; inset: 0; pointer-events: none; z-index: 11; }
 /* 文字工具的内联输入框 */

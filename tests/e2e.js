@@ -140,6 +140,41 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   check('Bar Count 每 2 根显示(只出现偶数)', bcInfo.calls.length > 3 && bcInfo.allEven,
         JSON.stringify(bcInfo.calls.slice(0, 10)));
 
+  /* 光标形状 (用户 2026-10-23 指出原版图表里鼠标是系统十字指针, 不是普通箭头):
+     主图 = crosshair (由 #chartArea 继承下来); 右侧价格轴 = ns-resize (库自己设的上下双箭头,
+     不能被十字盖掉, 否则拖动价格轴就没提示了)。 */
+  const curInfo = await page.evaluate(() => {
+    const box = document.getElementById('chartMain');
+    const cvs = [...box ? box.querySelectorAll('canvas') : []];
+    const mainCv = cvs.slice().sort((a, b) => b.width * b.height - a.width * a.height)[0] || null;
+    return {
+      area: getComputedStyle(document.getElementById('chartArea')).cursor,
+      main: mainCv ? getComputedStyle(mainCv).cursor : '?',
+      rect: box ? { x: box.getBoundingClientRect().x, y: box.getBoundingClientRect().y,
+        w: box.getBoundingClientRect().width, h: box.getBoundingClientRect().height } : null,
+    };
+  });
+  check('图表区鼠标是系统十字指针 (与 TradingView 一致)',
+        curInfo.area === 'crosshair' && curInfo.main === 'crosshair',
+        `area=${curInfo.area} main=${curInfo.main}`);
+
+  /* 价格轴的 ns-resize 是库按 hover 位置动态设的, 要先真的把鼠标移上去再读 */
+  let axisCur = '?';
+  if (curInfo.rect) {
+    const rr = curInfo.rect;
+    await page.mouse.move(rr.x + rr.w - 28, rr.y + rr.h * 0.45);
+    await page.waitForTimeout(160);
+    axisCur = await page.evaluate(() => {
+      const box = document.getElementById('chartMain');
+      const cvs = [...box.querySelectorAll('canvas')];
+      const ax = cvs.filter(c => c.width > 0 && c.width < 120)[0];
+      return ax ? getComputedStyle(ax).cursor : '?';
+    });
+    await page.mouse.move(rr.x + rr.w * 0.45, rr.y + rr.h * 0.45);
+    await page.waitForTimeout(80);
+  }
+  check('鼠标移到右侧价格轴时是上下双箭头 (不被十字盖掉)', axisCur === 'ns-resize', axisCur);
+
   /* Bar Count 几何: 照 reference/20 逐像素实测 calibrate
      —— 数字墨迹高 15 device px(=11px 常规字重), 顶端距 K 线低点固定 24.4 CSS px, 水平居中于 K 线 */
   const bcGeo = await page.evaluate(async () => {
