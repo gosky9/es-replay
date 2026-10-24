@@ -26,6 +26,7 @@ const App = {
      现在: 本场不限笔数 + 历史最近 HIST_SESSIONS 场, 平铺混排, 本场那几行左边加一根蓝竖条。 */
   HIST_SESSIONS: 10,
   _hiddenTradeIds: null,     // 只影响显示: 点「清空列表」把当前这些 id 藏起来, 账本一笔不动
+  _mkSig: null,              // 盘面箭头的"内容指纹", 内容没变就不重画 (见 rebuildMarkers)
 
   async boot() {
     // 主题: 默认浅色 (TradingView 默认), 记住用户选择
@@ -1458,9 +1459,79 @@ const App = {
     this.toast(`已合并导入 · 新增 ${r.added} 条 · 账本共 ${r.total} 条`);
   },
 
+  /** 美东墙钟字符串 → chartTime 口径的秒 ("YYYY-MM-DD HH:MM ET" → 秒)
+   *
+   *  日内 K 线的 t 值是 chartTime(epoch, off) = epoch + off*3600, 本质就是
+   *  「把美东墙钟时间当成 UTC 来数秒」。而账本里的 entryTime / exitTime 正是
+   *  etTimeStr() 产出的同一条墙钟时间 —— 所以把它按 UTC 解析出来, 天然等于那根 K 线的 t,
+   *  根本不用去反解 off 是 -4 还是 -5 (也就不会因为夏令时猜错而整体偏一小时)。
+   *
+   *  解析不了 (空串 / '--' / 老数据格式) 返回 null, 调用方跳过就行。 */
+  _wallSec(str) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(str || ''));
+    if (!m) return null;
+    return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) / 1000;
+  },
+
+  /** 从账本把盘面箭头重新摆出来 (用户 2026-10-24 报「右表有了, 图上没箭头」)
+   *
+   *  原来箭头只活在内存: addMarker 成交那一刻往 ChartMgr.markers 里塞一个, 刷新页面就全没了;
+   *  右边的交易记录列表却是从账本读的 —— 于是「列表有、图上没有」, 两边脱节。
+   *  这个方法把缺口补上: 账本里有的交易, 入场/出场两端的箭头都能重新摆回图上。
+   *
+   *  画谁: 跟右侧列表同一个口径 (visibleTrades() = 本场全部 + 历史最近 HIST_SESSIONS 场)。
+   *  画不出来多少: 账本一笔只有一个日期, 而盘面一次只加载一段行情 —— 落在窗口外的
+   *  由 drawTradeMarkers 里 barByTime 返 null 自然跳过, 不在这里额外筛。
+   *
+   *  另外补一笔账本里还没有的: **当前持仓** (要等平仓才 _settle 写账本),
+   *  切周期/切时段时它还在手上, 入场箭头不能因此消失。 */
+  rebuildMarkers() {
+    if (!this.engine) return;
+    const isDay = (this.tf === '1d' || this.tf === '3d' || this.tf === '1w' || this.tf === '1M');
+    const out = [];
+
+    // side 是 'long'/'short'; 同一笔交易里「出场方向 = 入场方向的反面」
+    const add = (wall, side, price, isExit) => {
+      const sec = this._wallSec(wall);
+      if (sec == null || price == null || !isFinite(price)) return;
+      const buy = (side === 'long') !== !!isExit;
+      out.push({
+        time: isDay ? String(wall).slice(0, 10) : sec,   // 日/周线的 marker.time 是 'yyyy-mm-dd'
+        position: buy ? 'belowBar' : 'aboveBar',
+        color: isExit ? Draw.MARK_EXIT : (buy ? Draw.MARK_UP : Draw.MARK_DOWN),  // 只是记录, 实际颜色由 draw.js 定
+        shape: buy ? 'arrowUp' : 'arrowDown',
+        text: buy ? '买' : '卖',
+        price,
+        isExit: !!isExit,
+      });
+    };
+
+    for (const t of this.visibleTrades()) {
+      add(t.entryTime, t.side, t.entryPrice, false);
+      add(t.exitTime, t.side, t.exitPrice, true);
+    }
+    if (Trading.pos !== 0 && Trading._entryTime) {
+      add(Trading._entryTime, Trading._entrySide, Trading._entryPrice, false);
+    }
+
+    /* 回放每推进一根都会走到这里, 内容没变就直接返回 —— 否则等于每个 tick 白算一遍
+       (账本几百笔时字符串拼一次也不贵, 但没必要)。
+       注意还要看 ChartMgr.markers 是不是空的: 切 RTH/ETH 之类会先 setMarkers([]),
+       那之后 sig 虽然和上一轮相同, 图上的箭头却已经被清掉了, 必须重建回来。 */
+    const sig = out.map(m => m.time + '|' + m.price + '|' + (m.isExit ? 1 : 0)).join(',');
+    if (sig === this._mkSig && ChartMgr.markers.length) return;
+    this._mkSig = sig;
+    ChartMgr.setMarkers(out);
+    Draw.render();
+  },
+
   refreshMarkers() {
     if (!this.engine) return;
-    if (!Trading.trades.length && ChartMgr.markers.length) ChartMgr.setMarkers([]);
+    /* 本场没有任何成交流水 => 盘面上这些箭头只可能是「上一次留下的」, 一律交给账本重建,
+       这样刷新页面 / 切周期 / 切时段之后箭头都跟右侧列表对得上。
+       本场有成交流水时走 addMarker 的增量画法 (成交那一刻立刻出箭头), 不在这里打扰它;
+       只有当数组意外空掉时才补建一次。 */
+    if (!Trading.trades.length || !ChartMgr.markers.length) this.rebuildMarkers();
   },
 
   /* ================================================================

@@ -436,6 +436,11 @@ const Trading = {
       tf: (typeof ChartMgr !== 'undefined' && ChartMgr.tf) || null,
       session: (typeof App !== 'undefined' && App.session) || null,
       entryTime: this._entryTime || '',
+      /* 入场时刻的行情时间 (秒)。原来只存了 entryTime 这个**字符串**, 没有秒级时间戳,
+         于是刷新页面后想按时间把入场箭头摆回原来那根 K 线上, 只能从 exitTime/exitEpoch
+         反解时区偏移 (还必须恰好是 -4/-5 才敢用)。这里直接把 _entryEpoch 落盘, 一劳永逸;
+         历史老记录缺失这个字段时, app.js 会退回用墙钟字符串解析 (见 _wallSec)。 */
+      entryEpoch: this._entryEpoch || null,
       entryPrice: +(this._entryPrice || 0).toFixed(2),
       exitTime: (epoch != null && off != null) ? etTimeStr(epoch, off) : '',
       exitPrice: +exitPrice.toFixed(2),

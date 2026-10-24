@@ -329,7 +329,16 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
 
   check('买入开仓', (await page.textContent('#stPos')).includes('多'),
         await page.textContent('#stPos') + ' 记录' + await page.textContent('#tradeCount'));
-  check('成交标记', (await page.evaluate(() => ChartMgr.markers.length)) === 1);
+  /* 这里数的是"当前这根 K 线上的箭头", 不是 markers 总长度 ——
+     v1.2.7 起 ChartMgr.markers 里还会有从账本重建出来的历史箭头 (见 rebuildMarkers),
+     总数取决于账本里攒了多少笔, 拿它当断言等于让用例依赖历史数据。 */
+  const mkNow = await page.evaluate(() => {
+    const cur = App.engine.current;
+    const isDay = (App.tf === '1d' || App.tf === '1w');
+    const t = isDay ? etDateStr(cur.epoch, cur.off) : chartTime(cur.epoch, cur.off);
+    return { atNow: ChartMgr.markers.filter(m => m.time === t).length, total: ChartMgr.markers.length };
+  });
+  check('成交标记', mkNow.atNow === 1, JSON.stringify(mkNow));
   const NUM = /^[+-]?\d+(\.\d+)?$/;   // 纯数字: 不带「点」「手」「$」
   check('浮动盈亏只显示数字(无 $ / 无「点」)', NUM.test((await page.textContent('#stFloat')).trim()),
         await page.textContent('#stFloat'));
@@ -417,10 +426,16 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   /* ---- 交易记录面板: 本场全部 + 历史最近 10 场 (用户 2026-10-24) ----
      造 12 个历史场次, 而且**故意让练习时间和行情时间反着来**:
      场次越新, 里面那笔的 exitEpoch 越小。这样只要实现偷懒按 exitEpoch 排, 顺序就立刻不对。
-     全程只改内存不 save(), 跑完把 trades 数组还原。 */
+     全程只改内存不 save(), 跑完把 trades 数组还原。
+
+     注意先要把账本缩到「只有本场」: data/journal.json 是历次 e2e 和手工练习攒下来的,
+     里面有多少历史场次完全不可控 —— 多几个旧场次就会把 历史1/历史2 挤出"最近 10 场",
+     断言跟着假失败 (本用例最初就是这么红的)。把变量掐死, 这条才测的是排序逻辑本身。 */
   const hist = await page.evaluate(() => {
     const now = Date.now();
     const saved = Journal.data.trades.slice();
+    const mine = saved.filter(t => t.sessionId === App.sessionId);
+    Journal.data.trades = mine.slice();          // 只留本场
     for (let i = 1; i <= 12; i++) {
       Journal.data.trades.push({
         id: 'T-hist-' + i,
@@ -441,6 +456,7 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
     const vis = App.visibleTrades();
     const nJournal = Journal.data.trades.length;
     const out = {
+      myRows: mine.length,
       rows: rows.length,
       curRows: rows.filter(r => r.classList.contains('is-current')).length,
       rowNames: rows.map(r => (r.querySelector('.t-setup').textContent || '').trim()),
@@ -479,21 +495,23 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
     return out;
   });
 
+  /* 12 个假场次里只取最近 10 个 (历史3~历史12), 加上本场那几笔 */
   check('交易记录 = 本场全部 + 历史最近 10 场 (12 场里只取 10 场)',
-        hist.visible === 12 && hist.rows === 12
+        hist.visible === hist.myRows + 10 && hist.rows === hist.myRows + 10
         && hist.names.includes('历史12') && hist.names.includes('历史3')
         && !hist.names.includes('历史1') && !hist.names.includes('历史2'),
-        `可见 ${hist.visible} 笔 / ${hist.rows} 行 / 名称 ${JSON.stringify(hist.names)}`);
+        `可见 ${hist.visible} 笔 / ${hist.rows} 行 (本场 ${hist.myRows}) / 名称 ${JSON.stringify(hist.names)}`);
 
-  /* 列表倒序渲染: 第 1、2 行是本场那两笔 (练习时间最新), 第 3 行才是历史里最新的 历史12。
-     如果实现偷懒按 exitEpoch 排, 第 3 行会变成 历史3 (它的行情时间最大) —— 这条就是抓它的。 */
+  /* 列表倒序渲染: 开头是本场那几笔 (练习时间最新), 紧跟其后才是历史里最新的 历史12。
+     如果实现偷懒按 exitEpoch 排, 本场之后会变成 历史3 (它的行情时间最大) —— 这条就是抓它的。 */
   check('列表按「练习时间」排而不是行情时间 (本场在最上, 历史里最新的紧跟其后)',
-        hist.rowNames[0] === '感觉' && hist.rowNames[1] === '感觉' && hist.rowNames[2] === '历史12',
-        `前 3 行 = ${JSON.stringify(hist.rowNames.slice(0, 3))} (期望 感觉, 感觉, 历史12)`);
+        hist.rowNames.slice(0, hist.myRows).every(n => n === '感觉')
+        && hist.rowNames[hist.myRows] === '历史12',
+        `本场 ${hist.myRows} 行 + 其后 = ${JSON.stringify(hist.rowNames.slice(0, hist.myRows + 1))}`);
 
   check('本场的记录左边有蓝竖条, 历史场次没有',
-        hist.curRows === 2 && hist.curBoxShadow === true,
-        `本场行 ${hist.curRows} 行, 竖条色命中 = ${hist.curBoxShadow}`);
+        hist.curRows === hist.myRows && hist.curBoxShadow === true,
+        `本场行 ${hist.curRows} 行 (账本 ${hist.myRows}), 竖条色命中 = ${hist.curBoxShadow}`);
 
   check('「清空列表」只切显示: 列表清空但账本一笔不少',
         hist.afterClearRows === 0 && hist.afterClearLen === hist.beforeLen
@@ -1388,6 +1406,111 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   check('平空仓的出场箭头方向正确 (买/朝上/在 K 线下方) 且为灰色',
         shortExit.shape === 'arrowUp' && shortExit.position === 'belowBar' && shortExit.isExit === true,
         JSON.stringify(shortExit));
+
+  /* ---- v1.2.7 从账本重建盘面箭头 ----
+     用户 2026-10-24: 「右侧列表确实显示了, 但中间没显示上下箭头」。
+     原因是箭头只活在内存 (addMarker 往 ChartMgr.markers 里塞), 刷新就没; 列表是从账本读的。
+     这里验四件事: ① 账本能还原两端 ② 窗口外的不乱摆 ③ 刷新后 (流水没了) 仍在 ④ 持仓中的入场不丢。 */
+  const rb = await page.evaluate(() => {
+    const q = document.getElementById('orderQty');
+    /* 账本里可能已有几十笔 (历次 e2e + 手工练习), 重建会把它们全带进来。
+       所以断言必须"按这一笔"定位 —— 用「时间 + 价格」挑出来, 不能数 ChartMgr.markers 的总数。 */
+    const pick = (wall, price, isExit) => {
+      const t = App._wallSec(wall);
+      return ChartMgr.markers.filter(m => m.time === t && m.price === price && !!m.isExit === isExit);
+    };
+    const info = arr => arr.map(m => ({
+      shape: m.shape, position: m.position, price: m.price,
+      hit: !!ChartMgr.barByTime(m.time),
+    }));
+    if (Trading.pos !== 0) App.closePosition();
+
+    // 造一笔真交易进账本 (空单: 入场朝下红, 出场朝上灰)
+    ChartMgr.setMarkers([]);
+    App.orderType = 'market';
+    App.pendingSetup = 'feel'; App.pendingCycle = 'range';
+    q.value = '1';
+    App._doPlaceOrder('sell');
+    App.closePosition();
+    const t = Journal.data.trades[Journal.data.trades.length - 1];
+    const rec = {
+      side: t.side, entryTime: t.entryTime, exitTime: t.exitTime,
+      entryPrice: t.entryPrice, exitPrice: t.exitPrice,
+      entryEpoch: t.entryEpoch, exitEpoch: t.exitEpoch,
+    };
+
+    /* ① 干净重建: 清掉内存箭头 + 清掉本场成交流水, 只剩账本一条路径 */
+    ChartMgr.setMarkers([]); Trading.trades.length = 0; App._mkSig = null;
+    App.rebuildMarkers();
+    const rebuilt = { ent: info(pick(t.entryTime, t.entryPrice, false)), ex: info(pick(t.exitTime, t.exitPrice, true)) };
+
+    /* ② 把这笔挪到 1999 年 (窗口外): 两个箭头还在数组里, 但一根 K 线都对不上 ——
+          drawTradeMarkers 靠 barByTime 返 null 跳过, 所以不会画到别的 K 线上 */
+    const saved = Journal.data.trades.slice();
+    const OUT_T = ['1999-01-04 10:00 ET', '1999-01-04 10:30 ET'];
+    Journal.data.trades = saved.map(x => (x.id === t.id
+      ? { ...x, entryTime: OUT_T[0], exitTime: OUT_T[1], entryEpoch: 915098400, exitEpoch: 915100200 }
+      : x));
+    ChartMgr.setMarkers([]); App._mkSig = null;
+    App.rebuildMarkers();
+    const outOfWin = {
+      ent: info(pick(OUT_T[0], t.entryPrice, false)),
+      ex: info(pick(OUT_T[1], t.exitPrice, true)),
+    };
+    Journal.data.trades = saved;
+
+    /* ③ 刷新后的等效路径: 没有成交流水时 refreshMarkers 必须走账本重建 */
+    ChartMgr.setMarkers([]); App._mkSig = null;
+    App.refreshMarkers();
+    const afterReload = { ent: info(pick(t.entryTime, t.entryPrice, false)), ex: info(pick(t.exitTime, t.exitPrice, true)) };
+
+    /* ④ 持仓中 (这一笔还没写进账本) 也要有入场箭头 —— 切周期时它还在手上。
+         做法跟真实切周期一样: 清空盘面 + 清空成交流水, 再走一次重建。 */
+    ChartMgr.setMarkers([]); Trading.trades.length = 0; App._mkSig = null;
+    q.value = '1';
+    App.pendingSetup = 'feel'; App.pendingCycle = 'range';   // setup 用完即清, 第二单要重新选
+    App._doPlaceOrder('buy');
+    ChartMgr.setMarkers([]); Trading.trades.length = 0; App._mkSig = null;
+    App.rebuildMarkers();
+    const cur = App.engine.current;
+    const tNow = chartTime(cur.epoch, cur.off);
+    const openAtNow = ChartMgr.markers
+      .filter(m => m.time === tNow && !m.isExit && m.shape === 'arrowUp')
+      .map(m => m.price);
+    App.closePosition();
+    ChartMgr.setMarkers([]); App._mkSig = null;
+
+    return { rec, rebuilt, outOfWin, afterReload, openAtNow };
+  });
+
+  check('账本记了入场时间戳 entryEpoch (刷新后重建箭头不用反解时区)',
+        typeof rb.rec.entryEpoch === 'number' && rb.rec.entryEpoch > 0
+        && rb.rec.entryEpoch <= rb.rec.exitEpoch
+        && Math.abs(rb.rec.exitEpoch - rb.rec.entryEpoch) < 86400,
+        JSON.stringify({ entryEpoch: rb.rec.entryEpoch, exitEpoch: rb.rec.exitEpoch }));
+
+  /* 用 >= 1 而不是 == 1: 同一根 K 线、同一价位上完全可能有两笔一模一样的交易
+     (这套用例里就有好几笔"市价开 → 立刻平"落在同一根上), 那本来就该画两个箭头。 */
+  check('从账本重建: 空单的入场(红/朝下/K上) + 出场(灰/朝上/K下) 两端都摆回来, 价格取自账本',
+        rb.rebuilt.ent.length >= 1
+        && rb.rebuilt.ent.every(m => m.shape === 'arrowDown' && m.position === 'aboveBar' && m.hit === true)
+        && rb.rebuilt.ex.length >= 1
+        && rb.rebuilt.ex.every(m => m.shape === 'arrowUp' && m.position === 'belowBar' && m.hit === true),
+        JSON.stringify(rb.rebuilt));
+
+  check('窗口外的交易不进盘面 (数组里留着, 但一根 K 线都对不上 → 不会被画到别处)',
+        rb.outOfWin.ent.length === 1 && rb.outOfWin.ent[0].hit === false
+        && rb.outOfWin.ex.length === 1 && rb.outOfWin.ex[0].hit === false,
+        JSON.stringify(rb.outOfWin));
+
+  check('刷新后 (成交流水清空) 箭头仍由账本重建, 不用重新下单',
+        rb.afterReload.ent.length >= 1 && rb.afterReload.ent.every(m => m.hit === true)
+        && rb.afterReload.ex.length >= 1 && rb.afterReload.ex.every(m => m.hit === true),
+        JSON.stringify(rb.afterReload));
+
+  check('持仓中还没写进账本的那一笔, 入场箭头也在 (切周期不丢)',
+        rb.openAtNow.length >= 1,
+        JSON.stringify({ 本根K线的入场买箭头: rb.openAtNow }));
 
   /* 上面几段把仓位都平干净了, 而后面「交易线右侧牌子」用例是接着一笔**持仓中**的交易做的。
      原来那个状态是靠早期突破单成交后一直持有留下的, 这里补一笔市价开仓把 tp/sl 挂回来。
