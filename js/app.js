@@ -21,6 +21,12 @@ const App = {
   _resumeAfterSetup: false,  // 因弹窗而暂停的回放, 关掉弹窗要续上
   sessionId: null,           // 本次复盘 id; 账本用它区分「本场」和「历史」
 
+  /* ---- 交易记录列表的显示范围 (用户 2026-10-24) ----
+     原来只列「本场」, 一按「开始复盘」就换新场次 id, 列表归零 —— 于是每次打开都是空的。
+     现在: 本场不限笔数 + 历史最近 HIST_SESSIONS 场, 平铺混排, 本场那几行左边加一根蓝竖条。 */
+  HIST_SESSIONS: 10,
+  _hiddenTradeIds: null,     // 只影响显示: 点「清空列表」把当前这些 id 藏起来, 账本一笔不动
+
   async boot() {
     // 主题: 默认浅色 (TradingView 默认), 记住用户选择
     this.theme = localStorage.getItem('es_replay_theme') || 'light';
@@ -237,7 +243,11 @@ const App = {
     $('btnBuy').addEventListener('click', () => this.placeOrder('buy'));
     $('btnSell').addEventListener('click', () => this.placeOrder('sell'));
     $('btnClose').addEventListener('click', () => this.closePosition());
-    $('btnResetTrades').addEventListener('click', () => this.clearSessionTrades());
+    // 同一个按钮两态: 有隐藏内容就「恢复显示」, 否则「清空列表」(只切显示, 不动账本)
+    $('btnResetTrades').addEventListener('click', () => {
+      if (this._hiddenTradeIds && this._hiddenTradeIds.size) this.restoreTradeView();
+      else this.clearTradeView();
+    });
 
     /* 市场周期 / setup 打标 */
     $('cycleSeg').addEventListener('click', e => {
@@ -1142,6 +1152,56 @@ const App = {
     return Journal.data.trades.filter(t => t.sessionId === sid);
   },
 
+  /** 面板里要列出来的交易 (用户 2026-10-24): **本场全部 + 历史最近 HIST_SESSIONS 场**
+   *  返回按"从旧到新"排好的数组, 渲染时再倒过来。
+   *
+   *  排序是个坑: 不能直接按 exitEpoch 排 —— 账本里的 exitEpoch 是**行情时间**,
+   *  今天先练 2024 年的行情、再练 2009 年的, 按它排会把 2009 那笔顶到最前面,
+   *  跟"我刚练的"完全对不上。所以两级排序:
+   *    主键 = 那一场是什么时候练的 (Journal.sessionAt 从场次 id 反解; 拿不到就退回该场最早的行情时间)
+   *    次键 = 场内先后 (exitEpoch, 同一场内行情时间是单调的, 这个没问题)
+   *
+   *  「历史最近 10 场」按场次算, 不按笔数 —— 一场 20 笔也整场进来, 不会切一半。 */
+  visibleTrades() {
+    if (typeof Journal === 'undefined' || !Journal.loaded) return [];
+    const all = Journal.data.trades || [];
+    if (!all.length) return [];
+
+    // 场次 → 练习时间 (毫秒)
+    const at = new Map();
+    for (const t of all) {
+      if (at.has(t.sessionId)) continue;
+      const ms = Journal.sessionAt(t.sessionId);
+      at.set(t.sessionId, ms != null ? ms : ((t.exitEpoch || 0) * 1000));
+    }
+
+    // 历史场次按练习时间倒序取前 N 个; 本场永远在内 (哪怕它一笔都没有)
+    const hist = [...new Set(all.map(t => t.sessionId).filter(s => s !== this.sessionId))]
+      .sort((a, b) => (at.get(b) || 0) - (at.get(a) || 0))
+      .slice(0, this.HIST_SESSIONS);
+    const keep = new Set(hist);
+
+    const out = all.filter(t => t.sessionId === this.sessionId || keep.has(t.sessionId));
+    out.sort((a, b) => {
+      const d = (at.get(a.sessionId) || 0) - (at.get(b.sessionId) || 0);
+      if (d) return d;                                     // 先按练习先后
+      return (a.exitEpoch || 0) - (b.exitEpoch || 0);      // 同一场内按行情先后
+    });
+    return out;
+  },
+
+  /** 这一笔属于哪一场 —— 给列表行的悬浮提示用 (用户选的是平铺, 靠这个分反而更省地方) */
+  tradeWhere(t) {
+    if (t.sessionId === this.sessionId) return '本场';
+    const ms = (typeof Journal !== 'undefined' && Journal.sessionAt)
+      ? Journal.sessionAt(t.sessionId) : null;
+    if (ms == null) return '历史场次';
+    const d = new Date(ms);
+    const p = n => String(n).padStart(2, '0');
+    return `历史场次 · 练习于 ${p(d.getMonth() + 1)}-${p(d.getDate())} `
+         + `${p(d.getHours())}:${p(d.getMinutes())}`;
+  },
+
   esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
       { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1170,22 +1230,46 @@ const App = {
     ChartMgr.setPosLine(Trading.pos === 0 ? null : Trading.avg);
     // 交易记录: 内容没变就不重建 DOM (回放每推进一根都会走到这里)
     const list = $('tradeList');
-    const total = (typeof Journal !== 'undefined' && Journal.loaded) ? Journal.data.trades.length : 0;
-    $('tradeCount').textContent = total > mine.length ? `(${mine.length}/${total})` : `(${mine.length})`;
-    const lastT = mine[mine.length - 1];
-    const sig = mine.length + '|' + (lastT ? lastT.id + '|' + lastT.r : '');
+    /* 换了场次（开始新复盘 / 日期跳转）就把隐藏集合清掉:
+       否则按钮会停在「恢复显示 (12)」, 可列表里全是新场次的记录, 点了也没东西可恢复。 */
+    if (!this._hiddenTradeIds || this._hiddenSid !== this.sessionId) {
+      this._hiddenTradeIds = new Set();
+      this._hiddenSid = this.sessionId;
+    }
+    const visAll = this.visibleTrades();                       // 本场 + 历史最近 10 场
+    const shown = visAll.filter(t => !this._hiddenTradeIds.has(t.id));
+    $('tradeCount').textContent = `(${shown.length})`;
+    $('tradeCount').title = `本场 ${mine.length} 笔` +
+      (visAll.length > mine.length ? ` · 历史 ${visAll.length - mine.length} 笔` : '');
+    // 按钮跟着状态走: 有隐藏内容时它自己变成「恢复显示」, 免得点了就再也看不回来
+    const btnR = $('btnResetTrades');
+    if (btnR) {
+      btnR.textContent = this._hiddenTradeIds.size
+        ? `恢复显示 (${this._hiddenTradeIds.size})` : '清空列表';
+      btnR.title = this._hiddenTradeIds.size
+        ? '把刚藏起来的记录放回列表（账本一直没动过）'
+        : '只清空这个列表的显示，账本里的记录一笔都不会删';
+    }
+    const lastT = shown[shown.length - 1];
+    const sig = shown.length + '|' + (lastT ? lastT.id : '') + '|' + visAll.length
+      + '|' + this._hiddenTradeIds.size;
     if (sig !== this._tradeSig) {
       this._tradeSig = sig;
-      if (!mine.length) {
-        list.innerHTML = '<div class="trade-empty">本场还没有完成的交易<br>' +
-          '<span class="t-none">平仓后自动记一笔</span></div>';
+      if (!shown.length) {
+        list.innerHTML = visAll.length
+          ? `<div class="trade-empty">列表已隐藏 ${visAll.length} 笔<br>` +
+            '<span class="t-none">账本没动，点上面「恢复显示」放回来</span></div>'
+          : '<div class="trade-empty">还没有交易记录<br>' +
+            '<span class="t-none">平仓后自动记一笔</span></div>';
       } else {
-        list.innerHTML = mine.slice().reverse().map(t => {
+        list.innerHTML = shown.slice().reverse().map(t => {
           const long = t.side === 'long';
+          const cur = t.sessionId === this.sessionId;
           const rc = t.r == null ? '' : (t.r > 0 ? 'up' : t.r < 0 ? 'down' : '');
           const rTxt = t.r == null ? '–' : (t.r > 0 ? '+' : '') + t.r.toFixed(2) + 'R';
           const pTxt = t.points == null ? '' : (t.points > 0 ? '+' : '') + t.points.toFixed(2) + '点';
-          return `<div class="trade-item t-one">
+          // is-current = 本场, 左边一根蓝竖条; 历史场次靠悬浮提示说明是哪一场
+          return `<div class="trade-item t-one${cur ? ' is-current' : ''}" title="${this.esc(this.tradeWhere(t))}">
           <div class="t-top">
             <span class="t-setup">${this.esc(t.setupName || Setups.name(t.setupId))}</span>
             <span class="t-side ${long ? 'buy' : 'sell'}">${long ? '多' : '空'}</span>
@@ -1204,20 +1288,29 @@ const App = {
     if (typeof Draw !== 'undefined' && Draw.render) Draw.render();   // 入场/止盈/止损线跟随持仓
   },
 
-  /** 清空「本场」的交易记录 (账本其它场次不动) */
-  clearSessionTrades() {
-    if (Trading.pos !== 0) { this.toast('还有持仓, 先平仓再清空', true); return; }
-    const mine = this.sessionTrades();
-    if (!mine.length) { this.toast('本场还没有完成的交易'); return; }
-    const ok = window.confirm(`清空本场 ${mine.length} 笔交易记录？\n账本里其它场次的记录不受影响。`);
-    if (!ok) return;
-    const sid = this.sessionId;
-    Journal.data.trades = Journal.data.trades.filter(t => t.sessionId !== sid);
-    Journal.data.orders = Journal.data.orders.filter(o => o.sessionId !== sid);
-    Journal.save();
-    this.renderTrading(); this.renderStats();
-    this.toast('已清空本场交易记录');
+  /** 只清空列表的**显示** —— 账本一笔都不动 (用户 2026-10-24 明确要的语义)
+   *  以前这个按钮叫「清空交易记录」, 会把本场记录从 Journal.data.trades 里真删掉;
+   *  现在改成把当前可见的 id 记进 _hiddenTradeIds, 纯前端, 刷新页面就全回来。
+   *  不做二次确认: 反正能一键恢复, 也不会丢东西。 */
+  clearTradeView() {
+    const vis = this.visibleTrades();
+    if (!vis.length) { this.toast('列表里没有记录'); return; }
+    this._hiddenTradeIds = new Set(vis.map(t => t.id));
+    this._tradeSig = null;
+    this.renderTrading();
+    this.toast(`列表已隐藏 ${vis.length} 笔 · 账本未动, 刷新页面即恢复`);
   },
+
+  restoreTradeView() {
+    this._hiddenTradeIds = new Set();
+    this._tradeSig = null;
+    this.renderTrading();
+    this.toast('已恢复显示');
+  },
+
+  /* 原来的 clearSessionTrades() 会真的把本场记录从账本里删掉 (filter + save)。
+     v1.2.6 起去掉这条路径: 按钮改成上面的 clearTradeView / restoreTradeView, 只切显示。
+     想真删账本请用统计页的导出 JSON 自行处理 —— 误点一次就丢记录的风险不值得留。 */
 
   /* ================================================================
      Setup 统计 —— 读的是账本全量 (跨复盘会话), 这才是这个功能的意义

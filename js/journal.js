@@ -262,6 +262,25 @@ const Journal = {
 
   uid(p) { return p + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6); },
 
+  /** 反解场次 id 里藏着的「真实练习时间」(毫秒时间戳, UTC)。
+   *
+   *  场次 id 的生成规则 (见 app.js 里三处 `'S' + Date.now()...`):
+   *      'S' + Date.now().toString(36) + 3 位随机码
+   *  所以去掉头尾各几位、按 36 进制解析, 拿到的就是创建这一场时的毫秒时间。
+   *
+   *  为什么需要它: 账本里每笔只有 exitTime / exitEpoch, 那是**行情时间**(K 线时间),
+   *  不是"我什么时候练的"。今天练 2009 年的行情, exitEpoch 会是很久以前,
+   *  光靠它没法把场次按练习先后排出来。
+   *
+   *  拿不准就返回 null (宁可退回用行情时间排, 也不要显示一个荒唐的年份):
+   *  解析出来不在 2017~2096 之间的一律当无效。 */
+  sessionAt(sid) {
+    if (!sid || typeof sid !== 'string' || sid[0] !== 'S' || sid.length < 6) return null;
+    const ms = parseInt(sid.slice(1, -3), 36);
+    if (!isFinite(ms) || ms < 1.5e12 || ms > 4e12) return null;
+    return ms;
+  },
+
   /** 读账本: localStorage 与磁盘取并集 (按 id 去重) */
   async load() {
     let local = null, disk = null;

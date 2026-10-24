@@ -414,6 +414,101 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   check('交易记录带 Setup 名', trRows.every(r => r.setup.length > 0), JSON.stringify(trRows.map(r => r.setup)));
   check('胜率统计', /笔/.test(await page.textContent('#stWin')), await page.textContent('#stWin'));
 
+  /* ---- 交易记录面板: 本场全部 + 历史最近 10 场 (用户 2026-10-24) ----
+     造 12 个历史场次, 而且**故意让练习时间和行情时间反着来**:
+     场次越新, 里面那笔的 exitEpoch 越小。这样只要实现偷懒按 exitEpoch 排, 顺序就立刻不对。
+     全程只改内存不 save(), 跑完把 trades 数组还原。 */
+  const hist = await page.evaluate(() => {
+    const now = Date.now();
+    const saved = Journal.data.trades.slice();
+    for (let i = 1; i <= 12; i++) {
+      Journal.data.trades.push({
+        id: 'T-hist-' + i,
+        // 场次 id 按真实规则造: 'S' + base36(毫秒) + 3 位随机码; i 越大越新 (每场差 10 分钟)
+        sessionId: 'S' + (now - (13 - i) * 600000).toString(36) + 'zz' + String.fromCharCode(97 + i),
+        setupId: 'feel', setupName: '历史' + i, cycle: 'range',
+        side: i % 2 ? 'long' : 'short', tf: '5m', session: 'rth',
+        entryTime: '2020-03-0' + ((i % 9) + 1) + ' 10:00 ET',
+        entryPrice: 3000, exitPrice: 3001,
+        exitEpoch: 1600000000 - i * 1000,       // 场次越新, 行情时间越早 —— 反着的
+        qty: 1, points: 1, riskPoints: 1, r: 1, usd: 50,
+        exitTime: '2020-03-0' + ((i % 9) + 1) + ' 10:30 ET', exitReason: 'tp',
+      });
+    }
+    App._tradeSig = null;
+    App.renderTrading();
+    const rows = [...document.querySelectorAll('#tradeList .trade-item')];
+    const vis = App.visibleTrades();
+    const nJournal = Journal.data.trades.length;
+    const out = {
+      rows: rows.length,
+      curRows: rows.filter(r => r.classList.contains('is-current')).length,
+      rowNames: rows.map(r => (r.querySelector('.t-setup').textContent || '').trim()),
+      visible: vis.length,
+      names: vis.map(t => t.setupName || ''),
+      curBoxShadow: (() => {
+        const cur = rows.find(r => r.classList.contains('is-current'));
+        const bg = cur ? getComputedStyle(cur).boxShadow : '';
+        return bg.indexOf('rgb(41, 98, 255)') >= 0;      // --accent #2962ff
+      })(),
+      // 只清显示: 列表空了, 账本长度一毫不变
+      beforeLen: nJournal,
+      btnBefore: document.getElementById('btnResetTrades').textContent,
+    };
+    App.clearTradeView();
+    out.afterClearRows = document.querySelectorAll('#tradeList .trade-item').length;
+    out.afterClearLen = Journal.data.trades.length;
+    out.afterClearBtn = document.getElementById('btnResetTrades').textContent;
+    out.afterClearEmpty = (document.querySelector('#tradeList .trade-empty') || {}).textContent || '';
+    App.restoreTradeView();
+    out.afterRestoreRows = document.querySelectorAll('#tradeList .trade-item').length;
+    out.afterRestoreBtn = document.getElementById('btnResetTrades').textContent;
+    // 换场次后隐藏集合要自动清空, 否则按钮会卡在「恢复显示 (N)」但列表里没有可恢复的东西
+    const sid0 = App.sessionId;
+    App.clearTradeView();
+    out.hiddenAfterClear = App._hiddenTradeIds.size;
+    App.sessionId = 'S' + Date.now().toString(36) + 'xyz';
+    App._tradeSig = null;
+    App.renderTrading();
+    out.afterSidChangeBtn = document.getElementById('btnResetTrades').textContent;
+    App.sessionId = sid0;
+    Journal.data.trades = saved;                 // 还原, 不 save()
+    App._hiddenTradeIds = new Set();
+    App._tradeSig = null;
+    App.renderTrading();
+    return out;
+  });
+
+  check('交易记录 = 本场全部 + 历史最近 10 场 (12 场里只取 10 场)',
+        hist.visible === 12 && hist.rows === 12
+        && hist.names.includes('历史12') && hist.names.includes('历史3')
+        && !hist.names.includes('历史1') && !hist.names.includes('历史2'),
+        `可见 ${hist.visible} 笔 / ${hist.rows} 行 / 名称 ${JSON.stringify(hist.names)}`);
+
+  /* 列表倒序渲染: 第 1、2 行是本场那两笔 (练习时间最新), 第 3 行才是历史里最新的 历史12。
+     如果实现偷懒按 exitEpoch 排, 第 3 行会变成 历史3 (它的行情时间最大) —— 这条就是抓它的。 */
+  check('列表按「练习时间」排而不是行情时间 (本场在最上, 历史里最新的紧跟其后)',
+        hist.rowNames[0] === '感觉' && hist.rowNames[1] === '感觉' && hist.rowNames[2] === '历史12',
+        `前 3 行 = ${JSON.stringify(hist.rowNames.slice(0, 3))} (期望 感觉, 感觉, 历史12)`);
+
+  check('本场的记录左边有蓝竖条, 历史场次没有',
+        hist.curRows === 2 && hist.curBoxShadow === true,
+        `本场行 ${hist.curRows} 行, 竖条色命中 = ${hist.curBoxShadow}`);
+
+  check('「清空列表」只切显示: 列表清空但账本一笔不少',
+        hist.afterClearRows === 0 && hist.afterClearLen === hist.beforeLen
+        && /隐藏/.test(hist.afterClearEmpty),
+        `清空后 ${hist.afterClearRows} 行 / 账本 ${hist.afterClearLen} 笔 (原 ${hist.beforeLen}) / 「${hist.afterClearEmpty.slice(0, 20)}」`);
+
+  check('清空后按钮变成「恢复显示 N」, 点一下全回来',
+        /恢复显示/.test(hist.afterClearBtn) && hist.afterRestoreRows === hist.rows
+        && /清空列表/.test(hist.afterRestoreBtn),
+        `${hist.afterClearBtn} → 恢复后 ${hist.afterRestoreRows} 行 / 按钮 ${hist.afterRestoreBtn}`);
+
+  check('换场次后隐藏集合自动清空 (按钮不会卡在「恢复显示」)',
+        hist.hiddenAfterClear > 0 && /清空列表/.test(hist.afterSidChangeBtn),
+        `清空时藏了 ${hist.hiddenAfterClear} 笔, 换场次后按钮 = ${hist.afterSidChangeBtn}`);
+
   /* 8. 周期切换 (顶栏快捷按钮) —— 默认已是 5m, 这里切到 15m 再验证 */
   await page.click('#tfGroup button[data-tf="15m"]');
   await waitLoaded(page);

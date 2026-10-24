@@ -742,6 +742,10 @@ body[data-theme="dark"] .tb-replay-pill { background: #d1d4dc; color: #131722; }
 .trade-item.t-one .t-top, .trade-item.t-one .t-sub { grid-column: 1; }
 .trade-item.t-one .t-r.up { color: var(--long); }
 .trade-item.t-one .t-r.down { color: var(--short); }
+/* 本场的交易: 左边一根 2px 蓝竖条 (用户 2026-10-24: 本场 + 历史 10 场平铺混排, 靠这个区分)
+   用 inset box-shadow 而不是 border / padding-left —— 不占布局空间, 有没有竖条都不影响
+   行内容器的左边界 (e2e 里有一条「逐行左对齐」的断言守着, 加 padding 会把它顶歪) */
+.trade-item.t-one.is-current { box-shadow: inset 2px 0 0 var(--accent); }
 .trade-item .t-none, .trade-empty .t-none { color: var(--text-dim); font-weight: 400; font-size: 11px; }
 
 /* ---------- Setup 选择弹窗 / 管理弹窗 ---------- */
