@@ -28,6 +28,20 @@ const App = {
   _hiddenTradeIds: null,     // 只影响显示: 点「清空列表」把当前这些 id 藏起来, 账本一笔不动
   _mkSig: null,              // 盘面箭头的"内容指纹", 内容没变就不重画 (见 rebuildMarkers)
 
+  /* ---- 未走完的那根 K 线 (用户 2026-10-24 报) ----
+     数据是 preprocess.py 按周期预先聚合好的**完整** K 线, 而切周期时锚点落在那根中间,
+     于是 5m 走到 12:00 切日线, 那根日线已经把全天的高低收都画出来了 (周线更狠, 直接给出整周)。
+     更糟的是交易引擎也读这同一根 bar:
+       · 市价单成交价 = 当根收盘 = 未来价 (日线上等于当天收盘)
+       · Trading.checkBar 用它判止盈止损 = 用当天剩余时间的高低点提前扫掉
+     所以不能只在显示层截断 —— 必须让 this.bars[idx] 这根本身就是"截至已知时刻"的值。
+
+     做法: 历史 bar 照旧用预聚合值, **只有当前这一根**按已知时刻用 1m 数据现算。
+     已知时刻存在 playhead 里, 切周期不改它 —— 否则 5m→1d→1w 时从日线只能推出
+     "当天走完(次日09:30)", 又泄露一次。 */
+  playhead: null,   // 已知信息的最晚时刻 (epoch 秒) = 最后一根已知 K 线的结束时间
+  _live: null,      // 被现算替换过的那根: { idx, orig }
+
   async boot() {
     // 主题: 默认浅色 (TradingView 默认), 记住用户选择
     this.theme = localStorage.getItem('es_replay_theme') || 'light';
@@ -812,6 +826,8 @@ const App = {
 
   async loadAndBuild(fresh) {
     this.loading(true, '加载数据…');
+    // 新开一场: 已知时刻作废, 下面按当前这根重新起算。切周期/切时段走 else 分支, 沿用原值
+    if (fresh) this.playhead = null;
     try {
       const w = await DataLoader.loadWindow(this.session, this.tf, this.targetEpoch,
                                             this.CONTEXT_BARS, this.FORWARD_BARS);
@@ -853,6 +869,18 @@ const App = {
         };
       }
       this.bars = bars;
+
+      /* 已知时刻(playhead):
+         · 新开一场 / 跳到别的时段 → 从当前这根重新起算 (下面 fresh 时清空)
+         · 切周期 / 切时段 → 沿用原来的值, 这样 5m→1d→1w 一路都是"12:05 已知",
+           不会因为从日线反推而变成"当天走完"
+         然后把这根"还没走完"的 O/H/L/C 换成截至 playhead 的现算值
+         (必须在 setData / new ReplayEngine 之前, 交易引擎读的就是这同一根)。 */
+      this._live = null;
+      const sIdx = Math.max(0, w.startIdx);
+      if (this.playhead == null) this.playhead = this.barEndAt(sIdx);
+      await this.applyLiveBar(sIdx);
+
       // 换周期/换时段/新会话: 时间轴刻度变了, 旧绘图的锚点会失效 => 清空（避免画出错位的线）
       const hadDraw = Draw.count();
       Draw.clearAll();
@@ -869,8 +897,14 @@ const App = {
       this.engine.onTick = (bar, idx, isNew) => {
         const backward = this._tickIdx != null && idx <= this._tickIdx;
         this._tickIdx = idx;
+        /* 已知时刻前移到这根的结束。推进到下一根时, 上一根"半根"就变成走完的了,
+           得把它的预聚合值还回去; 那时它已经不是最后一根, candle.update() 改不了它,
+           只能整体 setData 一次 (每条 bar 一次, 不是每帧, 可以接受)。 */
+        this.playhead = this.barEndAt(idx);
+        const restored = this.restoreLiveBar();
         // 新 bar 追加; 后退/跳转用 setData, 严格保持用户视窗(followLast 仅在贴右端时滚动)
-        if (isNew) ChartMgr.appendBar(bar);
+        if (restored) ChartMgr.setData(this.visibleBars(), { preserve: true, followLast: true });
+        else if (isNew) ChartMgr.appendBar(bar);
         else ChartMgr.setData(this.visibleBars(), { preserve: true, followLast: true });
         if (!backward) {
           if (Trading._pendingLimits) this.checkLimits(bar);
@@ -907,11 +941,72 @@ const App = {
 
   visibleBars() { return this.engine ? this.bars.slice(0, this.engine.idx + 1) : []; },
 
+  /** 第 i 根 K 线的结束时刻
+   *  用"下一根的起点"而不是"起点 + 周期分钟数": 日线要跨周末/节假日, 月线也不是固定 30 天。
+   *  窗口最后一根没有下一根时才退回估算。 */
+  barEndAt(i) {
+    const b = this.bars && this.bars[i];
+    if (!b) return null;
+    const nb = this.bars[i + 1];
+    if (nb && nb.epoch > b.epoch) return nb.epoch;
+    return b.epoch + (TF_MINUTES[this.tf] || 1) * 60;
+  },
+
+  /** 用 1 分钟数据算 [from, to) 的 OHLCV —— 专门用来现算"当前这根未走完的 K 线" */
+  async aggMinutes(from, to) {
+    if (!(to > from)) return null;
+    const d = await DataLoader.loadRange(this.session, '1m', from, to);
+    if (!d || !d.count) return null;
+    let o = null, h = -Infinity, l = Infinity, c = null, v = 0, n = 0;
+    for (let i = 0; i < d.count; i++) {
+      const t = d.time[i];
+      if (t < from || t >= to) continue;
+      if (o === null) o = d.open[i];
+      if (d.high[i] > h) h = d.high[i];
+      if (d.low[i] < l) l = d.low[i];
+      c = d.close[i]; v += d.volume[i]; n++;
+    }
+    if (!n) return null;
+    const r2 = x => Math.round(x * 100) / 100;
+    return { o: r2(o), h: r2(h), l: r2(l), c: r2(c), v, n };
+  },
+
+  /** 当前这根还没走完就把 O/H/L/C/V 换成"截至 playhead"的现算值
+   *  已经走完的（playhead >= 结束时刻）不动 —— 预聚合值本来就等于整根的聚合。 */
+  async applyLiveBar(i) {
+    const b = this.bars && this.bars[i];
+    if (!b || this.playhead == null) return;
+    const end = this.barEndAt(i);
+    if (end == null || this.playhead >= end) return;
+    const g = await this.aggMinutes(b.epoch, this.playhead);
+    if (!g) return;                    // 1m 取不到就退回预聚合值, 不做半吊子
+    this._live = { idx: i, orig: { o: b.o, h: b.h, l: b.l, c: b.c, v: b.v, ema: b.ema } };
+    b.o = g.o; b.h = g.h; b.l = g.l; b.c = g.c; b.v = g.v;
+    // EMA 是沿 close 递推的, close 一改这根必须重算 (前面那些根不受影响)
+    const k = 2 / 21;
+    const pe = i > 0 ? this.bars[i - 1].ema : null;
+    b.ema = pe == null ? b.c : b.c * k + pe * (1 - k);
+  },
+
+  /** 那根被现算过的 K 线已经走过去了 → 恢复成预聚合的完整值 */
+  restoreLiveBar() {
+    if (!this._live) return false;
+    const b = this.bars && this.bars[this._live.idx];
+    if (b) Object.assign(b, this._live.orig);
+    this._live = null;
+    return true;
+  },
+
   async switchTf(tf) {
     if (tf === this.tf) return;
     const cur = this.engine && this.engine.current;
     this.tf = tf;
-    this.targetEpoch = cur ? cur.epoch : this.targetEpoch;
+    /* 锚点改用"已知时刻"而不是当前 bar 的起点。
+       原来用 cur.epoch: 日线那根的起点是 09:30, 从日线切回 5m 会一路倒退到开盘
+       (用户 2026-10-24 实测: 12:00 切日线再切回来变成了 09:30)。
+       playhead - 1 保证落进"装着已知信息的最后一根"里。 */
+    this.targetEpoch = this.playhead != null ? this.playhead - 1
+                     : (cur ? cur.epoch : this.targetEpoch);
     this.syncTfUI();
     await this.loadAndBuild(false);
   },
@@ -920,7 +1015,8 @@ const App = {
     if (session === this.session) return;
     const cur = this.engine && this.engine.current;
     this.session = session;
-    this.targetEpoch = cur ? cur.epoch : this.targetEpoch;
+    this.targetEpoch = this.playhead != null ? this.playhead - 1
+                     : (cur ? cur.epoch : this.targetEpoch);
     ChartMgr.setMarkers([]);
     await this.loadAndBuild(false);
   },
@@ -934,6 +1030,7 @@ const App = {
     this.engine.destroy();
     this.engine = null;
     this.bars = [];
+    this.playhead = null; this._live = null;
     Draw.clearAll();
     ChartMgr.setData([]);
     ChartMgr.setMarkers([]);
@@ -964,6 +1061,7 @@ const App = {
       Trading.reset();
       this._limits = []; Trading._pendingLimits = false;
       ChartMgr.setMarkers([]);
+      this.playhead = null;        // 跳到别的时段 = 新的"已知时刻", 由新起点那根重新起算
       await this.loadAndBuild(false);
       this.toast('已跳转到 ' + raw + ' (新会话, 交易记录已重置)');
       return;

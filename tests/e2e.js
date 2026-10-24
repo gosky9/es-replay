@@ -1426,13 +1426,21 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
     if (Trading.pos !== 0) App.closePosition();
 
     // 造一笔真交易进账本 (空单: 入场朝下红, 出场朝上灰)
+    /* 注意不能用 trades[trades.length-1] 取"刚那笔": Journal.addTrade 内部按 exitEpoch 排序,
+       取末位拿到的是"行情时间最晚的那笔", 可能是本场次更早、甚至别的窗口里的交易。
+       用 id 差集取新增的那一条, 跟账本里已有什么完全无关。 */
+    const hadIds = new Set(Journal.data.trades.map(x => x.id));
     ChartMgr.setMarkers([]);
     App.orderType = 'market';
     App.pendingSetup = 'feel'; App.pendingCycle = 'range';
     q.value = '1';
     App._doPlaceOrder('sell');
     App.closePosition();
-    const t = Journal.data.trades[Journal.data.trades.length - 1];
+    const t = Journal.data.trades.find(x => !hadIds.has(x.id));
+    if (!t) {
+      const empty = { ent: [], ex: [] };
+      return { err: '这段没造出账本记录 (下单被拦了?)', rec: {}, rebuilt: empty, outOfWin: empty, afterReload: empty, openAtNow: [] };
+    }
     const rec = {
       side: t.side, entryTime: t.entryTime, exitTime: t.exitTime,
       entryPrice: t.entryPrice, exitPrice: t.exitPrice,
@@ -1487,7 +1495,7 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         typeof rb.rec.entryEpoch === 'number' && rb.rec.entryEpoch > 0
         && rb.rec.entryEpoch <= rb.rec.exitEpoch
         && Math.abs(rb.rec.exitEpoch - rb.rec.entryEpoch) < 86400,
-        JSON.stringify({ entryEpoch: rb.rec.entryEpoch, exitEpoch: rb.rec.exitEpoch }));
+        JSON.stringify({ entryEpoch: rb.rec.entryEpoch, exitEpoch: rb.rec.exitEpoch }) + (rb.err ? ' · ' + rb.err : ''));
 
   /* 用 >= 1 而不是 == 1: 同一根 K 线、同一价位上完全可能有两笔一模一样的交易
      (这套用例里就有好几笔"市价开 → 立刻平"落在同一根上), 那本来就该画两个箭头。 */
@@ -2577,6 +2585,142 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
     App.closeSetupModal(false);
     localStorage.removeItem('es_replay_setups');   // 别把测试改动留给用户的下一场
   });
+
+  /* ================= v1.2.8 未走完的那根 K 线 =================
+     用户 2026-10-24:「5分钟显露出一半时, 我去看日线, 日线好像已经把今日的完成了」
+     数据是预处理按周期聚合好的完整 K 线, 切周期时锚点落在那根中间 → 那根含未来。
+     修法: 历史用预聚合值, 只有当前这根按"已知时刻(playhead)"用 1m 现算, 切周期不改 playhead。
+     下面用独立的 1m 聚合(不复用 App.aggMinutes)算出"应该是什么", 再跟图上的比。 */
+  const live = await page.evaluate(async () => {
+    const r2 = x => Math.round(x * 100) / 100;
+    /* 独立的 1m 聚合: 故意不走 App.aggMinutes, 免得实现错了测试跟着错 */
+    const agg1m = async (from, to) => {
+      const d = await DataLoader.loadRange('rth', '1m', from, to);
+      let h = -Infinity, l = Infinity, c = null, n = 0;
+      for (let i = 0; i < d.count; i++) {
+        const t = d.time[i];
+        if (t < from || t >= to) continue;
+        if (d.high[i] > h) h = d.high[i];
+        if (d.low[i] < l) l = d.low[i];
+        c = d.close[i]; n++;
+      }
+      return n ? { h: r2(h), l: r2(l), c: r2(c), n } : null;
+    };
+    if (Trading.pos !== 0) App.closePosition();
+
+    // 回到 5m, 跳到 2024-01-16 12:00 (窗口外 → 新开一段, 状态干净)
+    if (App.tf !== '5m') { await App.switchTf('5m'); }
+    document.getElementById('gotoInput').value = '2024-01-16 12:00';
+    await App.gotoTime();
+    await new Promise(r => setTimeout(r, 1500));
+    if (!App.engine) return { err: '跳转后没有 engine' };
+
+    const cur = App.engine.current;
+    const anchor = { time: etTimeStr(cur.epoch, cur.off), epoch: cur.epoch, playhead: App.playhead };
+    const partEnd = App.playhead;                       // 已知时刻 = 12:05
+    const ref5 = await agg1m(cur.epoch, partEnd);
+
+    // ① 切日线
+    await App.switchTf('1d');
+    await new Promise(r => setTimeout(r, 1200));
+    const d = App.engine.current;
+    const weekEnd = App.bars[App.engine.idx + 1] ? App.bars[App.engine.idx + 1].epoch : d.epoch + 86400;
+    const refDayPart = await agg1m(d.epoch, partEnd);
+    const refDayFull = await agg1m(d.epoch, weekEnd);
+    const day = {
+      bar: etTimeStr(d.epoch, d.off), h: r2(d.h), l: r2(d.l), c: r2(d.c),
+      part: refDayPart, full: refDayFull,
+      playheadSame: App.playhead === anchor.playhead,
+      isLive: !!App._live,
+    };
+
+    // ② 再切周线: playhead 不能被"从日线反推"污染
+    await App.switchTf('1w');
+    await new Promise(r => setTimeout(r, 1200));
+    const w = App.engine.current;
+    const wkEnd = App.bars[App.engine.idx + 1] ? App.bars[App.engine.idx + 1].epoch : w.epoch + 604800;
+    const refWkPart = await agg1m(w.epoch, partEnd);
+    const refWkFull = await agg1m(w.epoch, wkEnd);
+    const week = {
+      bar: etTimeStr(w.epoch, w.off), h: r2(w.h), l: r2(w.l), c: r2(w.c),
+      part: refWkPart, full: refWkFull,
+      playheadSame: App.playhead === anchor.playhead,
+    };
+
+    // ③ 切回 5m: 应该回到 12:00, 不能退到日线的 09:30
+    await App.switchTf('5m');
+    await new Promise(r => setTimeout(r, 1200));
+    const back = {
+      bar: etTimeStr(App.engine.current.epoch, App.engine.current.off),
+      playheadSame: App.playhead === anchor.playhead,
+      isLive: !!App._live,                              // 5m 那根是走完的, 不该被现算
+    };
+
+    // ④ 日线推进一根: 上一根必须恢复成预聚合的完整值
+    await App.switchTf('1d');
+    await new Promise(r => setTimeout(r, 1200));
+    const d2 = App.engine.current;
+    const d2End = App.bars[App.engine.idx + 1] ? App.bars[App.engine.idx + 1].epoch : d2.epoch + 86400;
+    const refD2Full = await agg1m(d2.epoch, d2End);
+    const oldIdx = App.engine.idx;
+    const liveBefore = { c: r2(d2.c), live: !!App._live };
+    App.engine.pause();
+    App.engine.step(1);
+    await new Promise(r => setTimeout(r, 900));
+    const oldBar = App.bars[oldIdx];
+    const drawnOld = ChartMgr._lastData[oldIdx];
+    const step = {
+      推进前: liveBefore,
+      推进后: {
+        c: r2(oldBar.c), drawnC: drawnOld ? r2(drawnOld.c) : null,
+        应恢复成: refD2Full, liveCleared: !App._live,
+      },
+    };
+
+    // ⑤ 交易引擎读到的"当前价"必须是部分 close, 不是全天收盘
+    await App.switchTf('5m');
+    await new Promise(r => setTimeout(r, 1000));
+    App.playhead = anchor.playhead;
+    await App.switchTf('1d');
+    await new Promise(r => setTimeout(r, 1200));
+    const d3 = App.engine.current;
+    const trade = {
+      当前价: r2(d3.c), 部分收盘: refDayPart.c, 全天收盘: refDayFull.c, isLive: !!App._live,
+    };
+
+    return { anchor, ref5, day, week, back, step, trade };
+  });
+
+  const near = (a, b) => Math.abs(a - b) < 0.01;
+  check('5m 走到 12:00 切日线: 那根日线只到 12:05, 不再是全天完整值',
+        !live.err && live.day.isLive
+        && near(live.day.h, live.day.part.h) && near(live.day.l, live.day.part.l) && near(live.day.c, live.day.part.c)
+        && (!near(live.day.c, live.day.full.c) || !near(live.day.l, live.day.full.l)),
+        JSON.stringify(live.day || live.err));
+
+  check('日线再切周线: 已知时刻不漂移 (不能从日线反推出「当天走完」)',
+        !live.err && live.week.playheadSame
+        && near(live.week.h, live.week.part.h) && near(live.week.l, live.week.part.l) && near(live.week.c, live.week.part.c)
+        && !near(live.week.c, live.week.full.c),
+        JSON.stringify(live.week || live.err));
+
+  check('切回 5m 时间不倒流 (回到 12:00, 不是日线那根的 09:30)',
+        !live.err && live.back.bar === live.anchor.time && live.back.playheadSame && !live.back.isLive,
+        JSON.stringify(live.back || live.err));
+
+  check('大周期推进一根后, 上一根恢复成完整的预聚合值 (图上也是)',
+        !live.err && live.step.推进前.live
+        && near(live.step.推进后.c, live.step.推进后.应恢复成.c)
+        && near(live.step.推进后.drawnC, live.step.推进后.应恢复成.c)
+        && !near(live.step.推进后.c, live.step.推进前.c)
+        && live.step.推进后.liveCleared,
+        JSON.stringify(live.step || live.err));
+
+  check('大周期上的「当前价」是部分收盘, 不是全天收盘 (市价单不再用未来价成交)',
+        !live.err && live.trade.isLive
+        && near(live.trade.当前价, live.trade.部分收盘)
+        && !near(live.trade.当前价, live.trade.全天收盘),
+        JSON.stringify(live.trade || live.err));
 
   check('无 console 错误', errors.length === 0, errors.slice(0, 3).join(' ; '));
 
