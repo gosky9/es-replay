@@ -1313,6 +1313,22 @@ const App = {
     return out;
   },
 
+  /** 盘面上要画箭头的那些交易 = visibleTrades 再排掉「点清空列表藏起来的」。
+   *
+   *  用户 2026-10-24:「清空列表这个按钮只清空了列表, 没清空做单对应的上下箭头」——
+   *  因为 rebuildMarkers 直接拿 visibleTrades(), 而列表那边是在 renderTrading 里自己
+   *  单独 filter 了一遍 _hiddenTradeIds, 两边口径不统一。
+   *  不改 visibleTrades 本身: clearTradeView 要靠它的"未过滤"结果来算要藏哪些 id。
+   *
+   *  _hiddenSid 的判定跟 renderTrading 保持一致 —— 换场次后旧集合自动失效,
+   *  否则新场次的箭头会被上一场留下的 id 挡住。 */
+  markerTrades() {
+    const list = this.visibleTrades();
+    if (!this._hiddenTradeIds || this._hiddenSid !== this.sessionId) return list;
+    if (!this._hiddenTradeIds.size) return list;
+    return list.filter(t => !this._hiddenTradeIds.has(t.id));
+  },
+
   /** 这一笔属于哪一场 —— 给列表行的悬浮提示用 (用户选的是平铺, 靠这个分反而更省地方) */
   tradeWhere(t) {
     if (t.sessionId === this.sessionId) return '本场';
@@ -1419,15 +1435,19 @@ const App = {
     const vis = this.visibleTrades();
     if (!vis.length) { this.toast('列表里没有记录'); return; }
     this._hiddenTradeIds = new Set(vis.map(t => t.id));
+    this._hiddenSid = this.sessionId;   // 别让 renderTrading 把它判成"换场次"又清掉
     this._tradeSig = null;
     this.renderTrading();
+    this.rebuildMarkers();              // 盘面上的上下箭头跟着一起消失
     this.toast(`列表已隐藏 ${vis.length} 笔 · 账本未动, 刷新页面即恢复`);
   },
 
   restoreTradeView() {
     this._hiddenTradeIds = new Set();
+    this._hiddenSid = this.sessionId;
     this._tradeSig = null;
     this.renderTrading();
+    this.rebuildMarkers();              // 箭头也放回来
     this.toast('已恢复显示');
   },
 
@@ -1628,7 +1648,7 @@ const App = {
       });
     };
 
-    for (const t of this.visibleTrades()) {
+    for (const t of this.markerTrades()) {
       add(t.entryTime, t.side, t.entryPrice, false);
       add(t.exitTime, t.side, t.exitPrice, true);
     }
@@ -1638,10 +1658,12 @@ const App = {
 
     /* 回放每推进一根都会走到这里, 内容没变就直接返回 —— 否则等于每个 tick 白算一遍
        (账本几百笔时字符串拼一次也不贵, 但没必要)。
-       注意还要看 ChartMgr.markers 是不是空的: 切 RTH/ETH 之类会先 setMarkers([]),
-       那之后 sig 虽然和上一轮相同, 图上的箭头却已经被清掉了, 必须重建回来。 */
+       注意还要比长度: 切 RTH/ETH 之类会先 setMarkers([]), 那之后 sig 虽然和上一轮相同,
+       图上的箭头却已经被清掉了, 必须重建回来。
+       用 `=== out.length` 而不是「markers 非空」: 清空列表后 out 本来就是 0 条,
+       拿真值判断会让它每个 tick 都白重建一次空数组。 */
     const sig = out.map(m => m.time + '|' + m.price + '|' + (m.isExit ? 1 : 0)).join(',');
-    if (sig === this._mkSig && ChartMgr.markers.length) return;
+    if (sig === this._mkSig && ChartMgr.markers.length === out.length) return;
     this._mkSig = sig;
     ChartMgr.setMarkers(out);
     Draw.render();

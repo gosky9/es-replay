@@ -487,12 +487,17 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
       beforeLen: nJournal,
       btnBefore: document.getElementById('btnResetTrades').textContent,
     };
+    /* 盘面箭头必须跟列表同进同退 (用户 2026-10-24 报: 清空列表只清了列表, 图上箭头还在) */
+    App.rebuildMarkers();
+    out.mkBefore = ChartMgr.markers.length;
     App.clearTradeView();
+    out.mkAfterClear = ChartMgr.markers.length;
     out.afterClearRows = document.querySelectorAll('#tradeList .trade-item').length;
     out.afterClearLen = Journal.data.trades.length;
     out.afterClearBtn = document.getElementById('btnResetTrades').textContent;
     out.afterClearEmpty = (document.querySelector('#tradeList .trade-empty') || {}).textContent || '';
     App.restoreTradeView();
+    out.mkAfterRestore = ChartMgr.markers.length;
     out.afterRestoreRows = document.querySelectorAll('#tradeList .trade-item').length;
     out.afterRestoreBtn = document.getElementById('btnResetTrades').textContent;
     // 换场次后隐藏集合要自动清空, 否则按钮会卡在「恢复显示 (N)」但列表里没有可恢复的东西
@@ -533,6 +538,10 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         hist.afterClearRows === 0 && hist.afterClearLen === hist.beforeLen
         && /隐藏/.test(hist.afterClearEmpty),
         `清空后 ${hist.afterClearRows} 行 / 账本 ${hist.afterClearLen} 笔 (原 ${hist.beforeLen}) / 「${hist.afterClearEmpty.slice(0, 20)}」`);
+
+  check('「清空列表」连盘面上的上下箭头一起清 (不是只清右边列表)',
+        hist.mkBefore > 0 && hist.mkAfterClear === 0 && hist.mkAfterRestore === hist.mkBefore,
+        `箭头 ${hist.mkBefore} 个 → 清空后 ${hist.mkAfterClear} → 恢复后 ${hist.mkAfterRestore}`);
 
   check('清空后按钮变成「恢复显示 N」, 点一下全回来',
         /恢复显示/.test(hist.afterClearBtn) && hist.afterRestoreRows === hist.rows
@@ -980,6 +989,27 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   const hid2 = await page.evaluate(() => Draw.hidden);
   check('隐藏/显示绘图切换', hid1 === true && hid2 === false);
 
+  /* 眼睛按钮也要把成交箭头一起藏掉 (用户 2026-10-24) ——
+     箭头是我们自己画在绘图层上的(库自带的小三角早就 setMarkers 关了),
+     所以它应该跟线一起被 hidden 挡住, 而不是像交易线/日报下划线那样始终显示。 */
+  const hidArrow = await page.evaluate(() => {
+    const o = Draw.drawTradeMarkers;
+    let n = 0;
+    Draw.drawTradeMarkers = function (ctx) { n++; return o.call(this, ctx); };
+    try {
+      Draw.hidden = false; Draw.render();
+      const shown = n;
+      Draw.hidden = true; Draw.render();
+      const hidden = n - shown;
+      return { shown, hidden };
+    } finally {
+      Draw.hidden = false; Draw.render();
+      Draw.drawTradeMarkers = o;
+    }
+  });
+  check('点眼睛隐藏绘图时, 盘面上的上下箭头也一起藏掉',
+        hidArrow.shown === 1 && hidArrow.hidden === 0, JSON.stringify(hidArrow));
+
   // 选中并删除 (Delete)
   await page.click('#sideToolbar button[data-tool="cursor"]');
   await page.mouse.click(P(360, 205).x, P(360, 205).y);   // 趋势线中点
@@ -1018,6 +1048,28 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
      原行为「换周期就清空」；现在是「各周期各存各的: 切走看不到, 切回来原样还在」。 */
   await page.click('#drawBar button[data-tool="trend"]');
   await draw2(P(300, 160), P(500, 300));
+
+  /* 趋势线中点原来会浮一个蓝底「+16.09 (+0.30%)」—— 用户 2026-10-24 明确不要。
+     只留这一条 trend 单独渲染, 并临时挡掉会画字的东西(交易线的 TP/SL 牌子),
+     再拦截 canvas 的 fillText: 这条线一个文字都不该产生。 */
+  const trendText = await page.evaluate(() => {
+    const it = Draw.items.find(i => i.type === 'trend');
+    if (!it) return { err: 'no trend' };
+    const keep = Draw.items, oLines = Draw.drawOrderLines;
+    const ctx = Draw.ctx, oTxt = ctx.fillText.bind(ctx);
+    const texts = [];
+    Draw.items = [it];
+    Draw.drawOrderLines = function () { };
+    ctx.fillText = function (t, x, y) { texts.push(String(t)); return oTxt(t, x, y); };
+    try { Draw.render(); } finally {
+      ctx.fillText = oTxt; Draw.drawOrderLines = oLines;
+      Draw.items = keep; Draw.render();
+    }
+    return { texts };
+  });
+  check('趋势线上不再浮「+X (Y%)」的蓝色涨跌标签',
+        !trendText.err && trendText.texts.length === 0, JSON.stringify(trendText));
+
   const beforeTf = await page.evaluate(() => ({
     n: Draw.count(), type: Draw.items[0] && Draw.items[0].type,
     a: Draw.items[0] && Draw.items[0].a, b: Draw.items[0] && Draw.items[0].b,

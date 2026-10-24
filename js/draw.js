@@ -943,9 +943,11 @@ const Draw = {
     // 顺序: 先色带/交易线, 再成交大箭头 —— 反过来的话持仓色带(半透明)会把箭头染淡
     //     (用户截图里箭头也是压在色带之上的饱和色)
     this.drawOrderLines(ctx);          // 交易线不受"隐藏绘图"影响
-    this.drawTradeMarkers(ctx);        // 成交大箭头 (K 线上方卖 / 下方买)
     this.drawReportMarks(ctx);         // 时间轴: 有日报的日期下加短下划线 (也不受"隐藏绘图"影响)
+    /* 成交大箭头放在 hidden 之后: 用户 2026-10-24 要求「眼睛按钮也要把上下箭头一起藏掉」。
+       它本来就是我们自己画在绘图层上的 (库自带的 markers 小三角早已关掉), 跟线一起收起才合理。 */
     if (this.hidden) return;
+    this.drawTradeMarkers(ctx);        // 成交大箭头 (K 线上方卖 / 下方买)
 
     for (const it of this.items.slice().sort((p, q) => (p.z || 0) - (q.z || 0))) {
       this.drawItem(ctx, it, it.id === this.selected);
@@ -1531,10 +1533,9 @@ const Draw = {
     } else if (it.type === 'trend') {
       if (ax == null || ay == null || bx == null || by == null) { ctx.restore(); return; }
       ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
-      const dP = it.b.p - it.a.p;
-      const pct = it.a.p ? (dP / it.a.p * 100) : 0;
-      label(`${dP >= 0 ? '+' : ''}${dP.toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`,
-            (ax + bx) / 2 + 8, (ay + by) / 2 - 12);
+      /* 原来这里会在线的中点浮一个蓝底 `+16.09 (+0.30%)` 的涨跌标签。
+         用户 2026-10-24 明确不要:「划线会出现这个蓝色的, 没必要出现」——
+         TradingView 的趋势线默认也不带它 (那是「显示价格变动」这个开关打开才有的)。 */
       if (selected) this.handles(ctx, [[ax, ay], [bx, by]]);
     } else if (it.type === 'arrow') {
       // 上/下箭头标记: 与成交标记同一个字形, 一下落一个
