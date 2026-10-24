@@ -45,6 +45,26 @@ const Draw = {
   FIBEXT: [0, 1, 2],
   MIN_DRAW_PX: 4,
 
+  /* ---------- 持久化 (用户 2026-10-24) ----------
+     「画的东西除非我删掉, 否则一直保留」—— 原来刷新/退出回放/切周期全丢, 因为这个对象
+     一行持久化都没有 (对比 trading.js 存持仓、journal.js 存账本)。
+
+     **按周期(tf)分桶存**, 是用户拍板的行为: 5m 上画的线只在 5m 出现, 切到日线看不到,
+     切回 5m 还在。没有选"存绝对时刻、跨周期都显示"的原因:
+       日内的锚点 t 是 chartTime(epoch, off) = 秒, 日/周/月线的 t 是 'yyyy-MM-dd' 字符串,
+       两套口径硬混必须做双向换算, 而且 1m 上画的一小段切到日线会被压成一个点 —— 划不来。
+     RTH/ETH 不算换周期: 同一根 bar 在两种时段下 t 完全一样, 切时段不丢。
+
+     双写: localStorage (同步, 立刻生效) + data/draw.json (落盘, 清缓存也不丢)。
+     没有 server.py (直接开 file://) 时 fetch 会失败, 静默降级成纯 localStorage。 */
+  STORE: 'es_replay_draw',
+  tf: null,                  // 当前 items 属于哪个周期 (由 App 在 loadAndBuild 里设)
+  _all: null,                // 全量存档 { version, byTf:{tf:[...]}, updatedAt }
+  _saveTimer: 0,             // 写磁盘的节流句柄
+  _clip: null,               // 复制的图元 (Ctrl+C/Ctrl+V, 只在本次页面内有效)
+  COPY_DL: 3,                // 粘贴副本向右偏移几根 K 线
+  COPY_DP: -2.5,             // 粘贴副本向下偏移多少点 (ES 2.5 点 = 10 个 tick)
+
   init() {
     this.canvas = document.getElementById('drawLayer');
     this.ctx = this.canvas.getContext('2d');
@@ -241,6 +261,14 @@ const Draw = {
     if (l == null || !isFinite(l)) return null;
     return this.timeOfLogical(l);
   },
+
+  /** x → 逻辑索引 (可以是小数、可以越界)。拖动时算横向位移用它 ——
+   *  时间轴不是等比的 (周末/夜盘缺口、日线是日期串), 直接拿"秒差"当位移会走样;
+   *  逻辑索引就是「第几根 K 线」, 像素和它线性对应, 加减都成立。 */
+  logicalAtX(x) {
+    const l = ChartMgr.chart.timeScale().coordinateToLogical(x);
+    return (l == null || !isFinite(l)) ? null : l;
+  },
   pOf(y) { return ChartMgr.candle.coordinateToPrice(y); },
 
   /** 一个 {t,p} 锚点 → 屏幕像素; 任一维取不到就返回 null */
@@ -294,6 +322,7 @@ const Draw = {
     it.z = ++this.zseq;
     it.color = it.color || this.COLOR;
     this.items.push(it);
+    this.save();                 // 每画完一个立刻落盘, 不给"忘了存"留窗口
     return it;
   },
 
@@ -309,6 +338,7 @@ const Draw = {
     this.items = this.items.filter(i => i.id !== this.selected);
     this.selected = null;
     this.render();
+    this.save();
     return true;
   },
   /** 按 id 删掉单个绘图 (中键点击用), 返回被删的那条 */
@@ -319,6 +349,7 @@ const Draw = {
     this.items = this.items.filter(i => i.id !== id);
     if (this.selected === id) this.selected = null;
     this.render();
+    this.save();
     return it;
   },
   removeAll() {
@@ -328,14 +359,140 @@ const Draw = {
     this.selected = null;
     this.draft = null;
     this.render();
+    this.save();                 // 清空也要存: 不然刷新一下又全回来了
     return n;
   },
-  clearAll() {   // 换会话时静默清空
+  clearAll() {   // 静默清空 (只在真需要销毁画布时用)
     this.items = []; this.selected = null; this.draft = null; this._drag = null;
     this.undo = []; this.redo = [];
     this.render();
+    this.save();
   },
   count() { return this.items.length; },
+
+  /* ---------- 存档读写 ---------- */
+  /** localStorage 里的全量存档 (格式不对就当空的, 不让一条坏数据把整个绘图搞死) */
+  _readLocal() {
+    try {
+      const o = JSON.parse(localStorage.getItem(this.STORE) || 'null');
+      if (o && typeof o === 'object' && o.byTf && typeof o.byTf === 'object') return o;
+    } catch (e) { }
+    return { version: 1, byTf: {}, updatedAt: 0 };
+  },
+
+  /** 把内存里的 items 存回「当前周期」那一桶。localStorage 立即写, 磁盘节流 800ms */
+  save() {
+    const tf = this.tf || (typeof ChartMgr !== 'undefined' && ChartMgr.tf) || '1m';
+    const all = this._readLocal();
+    all.version = 1;
+    all.byTf[tf] = this.snapshot();
+    all.updatedAt = Date.now();
+    this._all = all;
+    try { localStorage.setItem(this.STORE, JSON.stringify(all)); } catch (e) { }
+    this._scheduleToServer();
+    return all;
+  },
+
+  /** 拖动/点选这类高频操作会连着触发 save, 别每次都发一个请求 */
+  _scheduleToServer() {
+    if (this._saveTimer) return;
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = 0;
+      this._toServer(this._all || this._readLocal());
+    }, 800);
+  },
+
+  _toServer(all) {
+    try {
+      fetch('/api/draw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(all),
+      }).catch(() => { });          // 没服务端就只靠 localStorage, 不弹错
+    } catch (e) { }
+  },
+
+  /** 启动时读一次存档: 先 localStorage (同步、立刻可用), 再补一次磁盘取更新的那份 */
+  async load() {
+    const local = this._readLocal();
+    let disk = null;
+    try {
+      const r = await fetch('/api/draw', { cache: 'no-store' });
+      if (r.ok) {
+        const o = await r.json();
+        if (o && typeof o === 'object' && o.byTf) disk = o;
+      }
+    } catch (e) { }
+    /* 取 updatedAt 更新的那份: 磁盘通常更权威, 但刚编辑完还没落盘时 localStorage 才是最新的 */
+    const best = (disk && (disk.updatedAt || 0) > (local.updatedAt || 0)) ? disk : local;
+    this._all = best;
+    if (best === disk) {
+      try { localStorage.setItem(this.STORE, JSON.stringify(best)); } catch (e) { }
+    }
+    return best;
+  },
+
+  /** 把「当前周期」那一桶装回画布。
+   *  进回放 / 切周期 / 切时段 / 刷新之后都走这里, 替换掉原来的 Draw.clearAll()。
+   *  调用时机必须在 ChartMgr.setData() 之后 —— 图元要靠 ChartMgr._lastData 换算坐标。 */
+  restore(tf) {
+    if (tf) this.tf = tf;
+    const key = this.tf || (typeof ChartMgr !== 'undefined' && ChartMgr.tf) || '1m';
+    const all = this._all || this._readLocal();
+    const list = (all.byTf && all.byTf[key]) || [];
+    this.items = JSON.parse(JSON.stringify(list));
+    this.selected = null; this.draft = null; this._drag = null;
+    /* 撤销栈不跨会话: 刷新完还能撤销到"上一根线"只会让人困惑 (而且 undo 里的图元可能是别的周期的) */
+    this.undo = []; this.redo = [];
+    // id / z 计数器要跳过已装回来的, 否则新画的会跟存档里的撞 id
+    let mx = 0, mz = 0;
+    for (const it of this.items) {
+      if (it.id > mx) mx = it.id;
+      if (it.z > mz) mz = it.z;
+    }
+    if (mx + 1 > this.seq) this.seq = mx + 1;
+    if (mz + 1 > this.zseq) this.zseq = mz + 1;
+    this.render();
+    return this.items.length;
+  },
+
+  /* ---------- 复制 / 粘贴 ---------- */
+  /** 复制选中的图元 (Ctrl+C)。返回被复制的那个, 没选中返回 null */
+  copySelected() {
+    if (this.selected == null) return null;
+    const it = this.items.find(i => i.id === this.selected);
+    if (!it) return null;
+    this._clip = JSON.parse(JSON.stringify(it));
+    delete this._clip.id;                 // id/z 由 addItem 重新发, 否则和原图撞
+    delete this._clip.z;
+    return it;
+  },
+
+  /** 粘贴一份副本 (Ctrl+V): 右下偏移, 自动选中, 之后可以像手画的一样拖/改/删 */
+  paste() {
+    const c = this._clip;
+    if (!c) return null;
+    const mv = pt => {
+      if (!pt) return pt;
+      let t = pt.t;
+      const l = this._logicalOfTime(pt.t);
+      if (l != null) {
+        const nt = this.timeOfLogical(l + this.COPY_DL);
+        if (nt != null) t = nt;
+      }
+      return { t, p: Math.round((pt.p + this.COPY_DP) * 100) / 100 };
+    };
+    const it = JSON.parse(JSON.stringify(c));
+    it.a = mv(it.a);
+    if (it.b) it.b = mv(it.b);
+    if (it.c) it.c = mv(it.c);
+    if (!it.a) return null;
+    this.pushHistory();
+    this.addItem(it);                     // addItem 里会 save()
+    this.selected = it.id;
+    this.render();
+    return it;
+  },
 
   /* ---------- 撤销 / 重做 (顶栏 ↶ ↷) ---------- */
   undo: [], redo: [],
@@ -441,6 +598,7 @@ const Draw = {
       this.pushHistory();                      // 拖动前留快照, 供 ↶ 撤销
       this._drag = {
         id: hit.id, part: hit.part, startX: x, startY: y,
+        startL: this.logicalAtX(x),          // 横向位移的基准 (见 onMove 的 body 分支)
         orig: JSON.parse(JSON.stringify(it)),
       };
       this.render();
@@ -588,27 +746,55 @@ const Draw = {
         if (part === 'a') it.a = { t, p };
         else if (part === 'b') it.b = { t, p };
         else if (part === 'c') it.c = { t, p };
-        else {                                   // body: 三个点一起上下移
+        else {                                   // body: 三个点一起平移
           const o = this._drag.orig;
-          const dP = p - this.pOf(this._drag.startY);
-          it.a = { t: o.a.t, p: o.a.p + dP };
-          it.b = { t: o.b.t, p: o.b.p + dP };
-          it.c = { t: o.c.t, p: o.c.p + dP };
+          const sh = this._shifter(p, x);
+          it.a = sh(o.a); it.b = sh(o.b); it.c = sh(o.c);
         }
       }
       else if (part === 'a') { it.a = { t, p }; }
       else if (part === 'b') { it.b = { t, p }; }
-      else {  // body: 整体平移
+      else {  // body: 整体平移 (上下 + 左右)
         const o = this._drag.orig;
-        const dP = p - this.pOf(this._drag.startY);
         if (it.type === 'trend' || it.type === 'rect' || it.type === 'fib') {
-          it.a = { t: o.a.t, p: o.a.p + dP };
-          it.b = { t: o.b.t, p: o.b.p + dP };
+          const sh = this._shifter(p, x);
+          it.a = sh(o.a); it.b = sh(o.b);
         }
       }
       this.render();
       return;
     }
+  },
+
+  /** x 相对拖动起点的横向位移, 单位是「根」——时间轴不等比, 只有逻辑索引能这么加 */
+  _deltaLogical(x) {
+    const a = this._drag && this._drag.startL;
+    const b = this.logicalAtX(x);
+    return (a == null || b == null) ? null : (b - a);
+  },
+
+  /** 「整体平移」用: 返回一个把原锚点按本次拖动量搬过去的函数。
+   *
+   *  这里以前只算价格增量 dP、`t` 直接抄回原值, 于是趋势线/矩形/斐波那契只能上下拖
+   *  (用户 2026-10-24 报)。横向也不能用秒差: 周末缺口、夜盘、日线的日期串都不等比。
+   *  用逻辑索引 (第几根 K 线) 做位移再换算回该周期的 t —— 日线自动得到 'yyyy-mm-dd',
+   *  跨周末也不会漂。 */
+  _shifter(p, x) {
+    const dg = this._drag;
+    const dP = p - this.pOf(dg.startY);
+    const dL = this._deltaLogical(x);
+    return pt => {
+      if (!pt) return pt;
+      let t = pt.t;
+      if (dL != null) {
+        const l = this._logicalOfTime(pt.t);
+        if (l != null) {
+          const nt = this.timeOfLogical(l + dL);
+          if (nt != null) t = nt;
+        }
+      }
+      return { t, p: pt.p + dP };
+    };
   },
 
   onUp(e) {
@@ -618,7 +804,7 @@ const Draw = {
       this.render();
       return;
     }
-    if (this._drag) { this._drag = null; this.render(); }
+    if (this._drag) { this._drag = null; this.render(); this.save(); }   // 拖完立刻落盘
     // draft 不在 mouseup 结束: 两次点击才完成
   },
 

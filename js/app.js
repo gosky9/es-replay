@@ -50,6 +50,9 @@ const App = {
     ChartMgr.theme = this.theme;
     ChartMgr.init();
     Draw.init();
+    /* 绘图存档: localStorage 立刻可用, 同时补一次磁盘 (取更新的那份)。
+       真正装进画布要等 loadAndBuild —— 图元要靠 ChartMgr._lastData 才能换算坐标。 */
+    try { await Draw.load(); } catch (e) { console.error('draw load failed', e); }
 
     /* 本次复盘 id 必须排在 Trading.load() 前面: 持仓靠它做归属校验,
        不是本场的持仓要在恢复阶段就丢掉, 免得挡住「开始复盘」 */
@@ -355,7 +358,7 @@ const App = {
     /* 键盘 */
     document.addEventListener('keydown', e => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-      // setup 弹窗/管理弹窗开着时, 快捷键一律不生效 (B/S/C 会误下单)
+      // setup 弹窗/管理弹窗开着时, 快捷键一律不生效 (C 会误平仓)
       if ($('setupModal').style.display === 'flex' || $('manageModal').style.display === 'flex') {
         if (e.key === 'Escape') {
           if ($('manageModal').style.display === 'flex') this.closeManageModal();
@@ -363,6 +366,22 @@ const App = {
         }
         return;
       }
+
+      /* ---- Ctrl / Cmd 组合键: 必须**拦在这里并 return** ----
+         Ctrl+C 的 e.key 同样是 'c', 以前会一路走到 `else if (k === 'c') closePosition()`
+         —— 想复制一根趋势线, 结果把持仓平了 (用户 2026-10-24 提复制时暴露)。
+         其余 Ctrl 组合 (Ctrl+S 存网页 / Ctrl+R 刷新 / Ctrl+B 书签 …) 一律交还浏览器,
+         绝不再有可能落进下单/平仓/重开始这些破坏性分支。 */
+      if (e.ctrlKey || e.metaKey) {
+        const k = e.key.toLowerCase();
+        if (k === 'c' && Draw.selected != null) {
+          if (Draw.copySelected()) { e.preventDefault(); this.toast('已复制绘图 · Ctrl+V 粘贴到旁边'); }
+        } else if (k === 'v' && Draw._clip) {
+          if (Draw.paste()) { e.preventDefault(); this.toast('已粘贴一份绘图, 可直接拖动'); }
+        }
+        return;
+      }
+
       if (e.key === 'Escape') {
         if ($('ctxMenu').style.display === 'block') { $('ctxMenu').style.display = 'none'; return; }
         if ($('helpModal').style.display === 'flex') { $('helpModal').style.display = 'none'; return; }
@@ -383,10 +402,10 @@ const App = {
       else if (e.key === 'ArrowLeft') this.engine.step(-1);
       else if (e.key === 'ArrowUp') { e.preventDefault(); this.stopOrderAtBarEdge('buy'); }
       else if (e.key === 'ArrowDown') { e.preventDefault(); this.stopOrderAtBarEdge('sell'); }
-      else if (k === 'r') { this.engine.restart(); ChartMgr.setData(this.visibleBars(), { fit: 'recent' }); }
-      else if (k === 'b') this.placeOrder('buy');
-      else if (k === 's') this.placeOrder('sell');
       else if (k === 'c') this.closePosition();
+      /* B / S / R 三个单键已按用户要求去掉 (2026-10-24):
+         Ctrl+S 想存网页会误卖、Ctrl+B 会误买、Ctrl+R 想刷新会重开 —— 全是破坏性动作。
+         下单/平仓/重新开始界面上都有按钮, 不缺入口。 */
     });
   },
 
@@ -559,7 +578,7 @@ const App = {
     if (!Draw.undo || !Draw.undo.length) { this.toast('没有可撤销的操作'); return; }
     Draw.redo.push(Draw.snapshot());
     Draw.items = Draw.undo.pop();
-    Draw.selected = null; Draw.render(); this.syncToolUI();
+    Draw.selected = null; Draw.render(); Draw.save(); this.syncToolUI();
     this.toast('已撤销');
   },
 
@@ -567,7 +586,7 @@ const App = {
     if (!Draw.redo || !Draw.redo.length) { this.toast('没有可重做的操作'); return; }
     Draw.undo.push(Draw.snapshot());
     Draw.items = Draw.redo.pop();
-    Draw.selected = null; Draw.render(); this.syncToolUI();
+    Draw.selected = null; Draw.render(); Draw.save(); this.syncToolUI();
     this.toast('已重做');
   },
 
@@ -881,14 +900,16 @@ const App = {
       if (this.playhead == null) this.playhead = this.barEndAt(sIdx);
       await this.applyLiveBar(sIdx);
 
-      // 换周期/换时段/新会话: 时间轴刻度变了, 旧绘图的锚点会失效 => 清空（避免画出错位的线）
-      const hadDraw = Draw.count();
-      Draw.clearAll();
-      this._drawCleared = hadDraw > 0 && !fresh;
       ChartMgr.setTf(this.tf);
       // 新会话: 显示最近 180 根; 切周期/时段: 锚定在原来的那根 K 线上
       ChartMgr.setData(bars.slice(0, w.startIdx + 1), { fit: fresh ? 'recent' : false });
       if (!fresh) ChartMgr.fitAround(Math.max(0, w.startIdx), 140);
+      /* 绘图改「按周期分桶、不再清空」(用户 2026-10-24):
+         原来这里是无条件 Draw.clearAll(), 于是切周期/切时段/换一段全把画的东西删了。
+         现在只有**真的换了周期**才换桶 (切回原周期线还在); 换 RTH/ETH、换时段、重开一场
+         都不动 items —— 同一根 bar 的 t 在两种时段下完全一样, 锚点本来就有效。
+         必须在 setData 之后调用: 图元要靠 ChartMgr._lastData 才能换算坐标。 */
+      if (Draw.tf !== this.tf) Draw.restore(this.tf);
       if (this.engine) this.engine.destroy();
       this.engine = new ReplayEngine(bars, Math.max(0, w.startIdx));
       this.engine.markStart(Math.max(0, w.startIdx));
@@ -930,8 +951,7 @@ const App = {
       const cur = this.engine.current;
       const s = document.getElementById('gotoInput');
       if (s && !s.value) s.value = etTimeStr(cur.epoch, cur.off).replace(' ET', '').slice(0, 16);
-      this.toast(`开始复盘: ${etTimeStr(cur.epoch, cur.off)} (${TF_LABEL[this.tf]} / ${this.session.toUpperCase()})` +
-                 (this._drawCleared ? ' · 周期已切换, 绘图已清空' : ''));
+      this.toast(`开始复盘: ${etTimeStr(cur.epoch, cur.off)} (${TF_LABEL[this.tf]} / ${this.session.toUpperCase()})`);
     } catch (e) {
       console.error(e);
       this.toast('加载失败: ' + e.message, true);
@@ -1031,7 +1051,11 @@ const App = {
     this.engine = null;
     this.bars = [];
     this.playhead = null; this._live = null;
-    Draw.clearAll();
+    /* 绘图不清 (用户 2026-10-24: 「除非我删掉, 否则一直保留」)。
+       原来这里 Draw.clearAll(), 所以「不小心点退出回放」画的东西就没了。
+       现在图元留在内存和存档里, 下次开始复盘由 loadAndBuild 的 Draw.restore 装回来;
+       这里只收掉选中/草稿/拖拽态 —— 紧接着 setData([]) 会重绘一次, 留着选中会画出残影。 */
+    Draw.selected = null; Draw.draft = null; Draw._drag = null;
     ChartMgr.setData([]);
     ChartMgr.setMarkers([]);
     document.getElementById('replayBar').classList.add('hidden');

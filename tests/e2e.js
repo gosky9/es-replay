@@ -45,6 +45,17 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
     await fetch('/api/journal', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ version: 1, trades: [], orders: [] }) });
   });
+
+  /* 绘图存档 (data/draw.json) 同样会真的落盘 —— 备份 + 清空,
+     否则上一轮留下的线会让本轮所有 Draw.count() 断言失真 */
+  const drawBackup = await page.evaluate(async () => {
+    try { const r = await fetch('/api/draw', { cache: 'no-store' }); return await r.json(); }
+    catch (e) { return { version: 1, byTf: {}, updatedAt: 0 }; }
+  });
+  await page.evaluate(async () => {
+    await fetch('/api/draw', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: 1, byTf: {}, updatedAt: 0 }) });
+  });
   check('开始弹窗显示', await page.isVisible('#startModal'));
   check('还没开始复盘时底栏日号条是隐藏的', await page.evaluate(() =>
     document.getElementById('dayStrip').classList.contains('hidden')
@@ -54,7 +65,12 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   const bg0 = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   check('默认浅色主题(TradingView 默认)', theme0 === 'light' && bg0 === 'rgb(255, 255, 255)', theme0 + ' / ' + bg0);
 
-  await page.evaluate(() => localStorage.clear());
+  await page.evaluate(() => {
+    localStorage.clear();
+    // 磁盘清了不代表内存干净: boot 时已经把旧存档读进 Draw._all 了, 这里一并作废
+    Draw._all = { version: 1, byTf: {}, updatedAt: 0 };
+    Draw.items = []; Draw.tf = null; Draw._clip = null;
+  });
 
   /* 2. 随机复盘 (默认 5m / RTH) */
   await page.click('#startBtn');
@@ -998,15 +1014,173 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   await page.waitForTimeout(120);
   check('一键删除全部绘图', (await page.evaluate(() => Draw.count())) === 0);
 
-  // 换周期后绘图清空 (时间轴刻度变了, 锚点失效)
+  /* ---------- v1.2.9 绘图存档: 按周期分桶 (用户 2026-10-24) ----------
+     原行为「换周期就清空」；现在是「各周期各存各的: 切走看不到, 切回来原样还在」。 */
   await page.click('#drawBar button[data-tool="trend"]');
   await draw2(P(300, 160), P(500, 300));
-  const beforeTf = await page.evaluate(() => Draw.count());
+  const beforeTf = await page.evaluate(() => ({
+    n: Draw.count(), type: Draw.items[0] && Draw.items[0].type,
+    a: Draw.items[0] && Draw.items[0].a, b: Draw.items[0] && Draw.items[0].b,
+  }));
   await page.click('#tfGroup button[data-tf="15m"]');
   await waitLoaded(page);
   await page.waitForTimeout(500);
-  check('换周期清空绘图', beforeTf === 1 && (await page.evaluate(() => Draw.count())) === 0,
-        '切换前 ' + beforeTf + ' → 切换后 ' + await page.evaluate(() => Draw.count()));
+  check('换周期后看不到别的周期画的线',
+        beforeTf.n === 1 && (await page.evaluate(() => Draw.count())) === 0,
+        `5m 上 ${beforeTf.n} 根 → 15m 上 ${await page.evaluate(() => Draw.count())} 根`);
+
+  // 在 15m 上另画一根水平线, 再切回 5m: 两根各归各的桶
+  await page.click('#drawBar button[data-tool="hline"]');
+  await page.mouse.click(P(420, 380).x, P(420, 380).y);
+  await page.waitForTimeout(150);
+  const in15 = await page.evaluate(() => Draw.count());
+  await page.click('#tfGroup button[data-tf="5m"]');
+  await waitLoaded(page);
+  await page.waitForTimeout(700);
+  const back5 = await page.evaluate(() => ({
+    n: Draw.count(), type: Draw.items[0] && Draw.items[0].type,
+    a: Draw.items[0] && Draw.items[0].a, b: Draw.items[0] && Draw.items[0].b,
+  }));
+  check('切回原周期, 那根趋势线原样回来 (锚点一点没变)',
+        in15 === 1 && back5.n === 1 && back5.type === 'trend'
+        && JSON.stringify(back5.a) === JSON.stringify(beforeTf.a)
+        && JSON.stringify(back5.b) === JSON.stringify(beforeTf.b),
+        `15m 上 ${in15} 根 → 5m 上 ${back5.n} 根 ${back5.type}`);
+
+  /* 存档双写: localStorage 即时 + data/draw.json 落盘 (写磁盘节流 800ms, 等它写完再比) */
+  await page.waitForFunction(async () => {
+    try {
+      const r = await fetch('/api/draw', { cache: 'no-store' });
+      const o = await r.json();
+      return !!(o && o.byTf && (o.byTf['5m'] || []).length && (o.byTf['15m'] || []).length);
+    } catch (e) { return false; }
+  }, { timeout: 8000 }).catch(() => { });
+  const store = await page.evaluate(async () => {
+    const ls = JSON.parse(localStorage.getItem('es_replay_draw') || 'null');
+    let disk = null;
+    try { const r = await fetch('/api/draw', { cache: 'no-store' }); disk = await r.json(); } catch (e) { }
+    const pick = (o, k) => (o && o.byTf && o.byTf[k] ? o.byTf[k].length : -1);
+    return { ls5m: pick(ls, '5m'), ls15m: pick(ls, '15m'), disk5m: pick(disk, '5m'), disk15m: pick(disk, '15m') };
+  });
+  check('存档按周期分桶, localStorage 与磁盘两边都有',
+        store.ls5m === 1 && store.ls15m === 1 && store.disk5m === 1 && store.disk15m === 1,
+        JSON.stringify(store));
+
+  /* ---------- v1.2.9 拖动: 任意方向 (原来只算价格增量, 横向不动) ---------- */
+  await page.click('#sideToolbar button[data-tool="cursor"]');
+  const dragBefore = await page.evaluate(() => {
+    const it = Draw.items.filter(i => i.type === 'trend').pop();
+    const pa = Draw._px(it.a), pb = Draw._px(it.b);
+    const r = Draw.canvas.getBoundingClientRect();
+    return {
+      id: it.id, at: it.a.t, bt: it.b.t, ap: it.a.p, bp: it.b.p,
+      ax: pa.x, ay: pa.y, bx: pb.x, by: pb.y,
+      mx: r.left + (pa.x + pb.x) / 2, my: r.top + (pa.y + pb.y) / 2,
+    };
+  });
+  await page.mouse.move(dragBefore.mx, dragBefore.my);
+  await page.mouse.down();
+  await page.mouse.move(dragBefore.mx - 80, dragBefore.my + 40, { steps: 12 });
+  await page.mouse.up();
+  await page.waitForTimeout(220);
+  const dragAfter = await page.evaluate(id => {
+    const it = Draw.items.find(i => i.id === id);
+    if (!it) return null;
+    const pa = Draw._px(it.a), pb = Draw._px(it.b);
+    return { at: it.a.t, bt: it.b.t, ap: it.a.p, bp: it.b.p, ax: pa.x, bx: pb.x };
+  }, dragBefore.id);
+  const dxA = dragAfter ? dragAfter.ax - dragBefore.ax : NaN;
+  const dxB = dragAfter ? dragAfter.bx - dragBefore.bx : NaN;
+  check('趋势线能左右拖 (两个端点一起横移, 不再只上下)',
+        !!dragAfter && dragAfter.at !== dragBefore.at && dragAfter.bt !== dragBefore.bt
+        && Math.abs(dxA + 80) < 6 && Math.abs(dxB + 80) < 6,
+        `Δx A=${dxA.toFixed(1)} B=${dxB.toFixed(1)}`);
+  check('左右拖的同时上下位移还在 (整体平移, 两端等量)',
+        !!dragAfter && dragAfter.ap < dragBefore.ap && dragAfter.bp < dragBefore.bp
+        && Math.abs((dragAfter.ap - dragBefore.ap) - (dragAfter.bp - dragBefore.bp)) < 0.01,
+        `Δp A=${(dragAfter.ap - dragBefore.ap).toFixed(2)} B=${(dragAfter.bp - dragBefore.bp).toFixed(2)}`);
+
+  /* ---------- v1.2.9 复制: 选中 → Ctrl+C → Ctrl+V ---------- */
+  const selPt = await page.evaluate(() => {
+    const it = Draw.items.filter(i => i.type === 'trend').pop();
+    const pa = Draw._px(it.a), pb = Draw._px(it.b);
+    const r = Draw.canvas.getBoundingClientRect();
+    return { mx: r.left + (pa.x + pb.x) / 2, my: r.top + (pa.y + pb.y) / 2 };
+  });
+  await page.mouse.click(selPt.mx, selPt.my);
+  await page.waitForTimeout(120);
+  check('点中趋势线进入选中态 (复制的起点)',
+        (await page.evaluate(() => Draw.selected)) != null,
+        'selected=' + await page.evaluate(() => Draw.selected));
+
+  await page.keyboard.press('Control+c');
+  const copied = await page.evaluate(() =>
+    Draw._clip ? { type: Draw._clip.type, hasId: 'id' in Draw._clip } : null);
+  check('Ctrl+C 把选中图元放进剪贴板 (摘掉 id, 免得和原图撞)',
+        !!copied && copied.type === 'trend' && !copied.hasId, JSON.stringify(copied));
+
+  await page.keyboard.press('Control+v');
+  await page.waitForTimeout(220);
+  const pasteRes = await page.evaluate(() => {
+    const arr = Draw.items.filter(i => i.type === 'trend');
+    const a = arr[0], b = arr[arr.length - 1];
+    const pa = a && Draw._px(a.a), pb = b && Draw._px(b.a);
+    return {
+      n: arr.length, selIsNew: Draw.selected === b.id,
+      dx: (pa && pb) ? pb.x - pa.x : null, dp: b.a.p - a.a.p,
+      ids: arr.map(i => i.id),
+    };
+  });
+  check('Ctrl+V 粘出一份副本, 粘完自动选中新那份',
+        pasteRes.n === 2 && pasteRes.selIsNew, JSON.stringify(pasteRes));
+  check('副本落在原图右下方 (3 根 K 线 / 2.5 点)',
+        pasteRes.dx != null && pasteRes.dx > 20 && Math.abs(pasteRes.dp + 2.5) < 0.01,
+        `Δx=${pasteRes.dx && pasteRes.dx.toFixed(1)}px Δp=${pasteRes.dp && pasteRes.dp.toFixed(2)}`);
+  check('副本是独立图元 (自己的 id), 不是共享同一个对象',
+        new Set(pasteRes.ids).size === 2, JSON.stringify(pasteRes.ids));
+
+  /* ---------- v1.2.9 快捷键: Ctrl 组合绝不能再落进单键分支 ----------
+     原来 Ctrl+C 的 e.key 就是 'c', 会直接 closePosition() —— 想复制一根线结果平了仓。 */
+  const keyProbe = await page.evaluate(() => {
+    const hit = { close: 0, buy: 0, sell: 0, restart: 0 };
+    const oClose = App.closePosition, oOrder = App.placeOrder;
+    const oRestart = App.engine && App.engine.restart;
+    try {
+      App.closePosition = () => { hit.close++; };
+      App.placeOrder = side => { if (side === 'buy') hit.buy++; else hit.sell++; };
+      if (App.engine) App.engine.restart = () => { hit.restart++; };
+      const fire = (key, ctrl) => document.dispatchEvent(
+        new KeyboardEvent('keydown', { key, ctrlKey: !!ctrl, bubbles: true, cancelable: true }));
+      fire('c', true); fire('s', true); fire('b', true); fire('r', true);
+    } finally {
+      App.closePosition = oClose; App.placeOrder = oOrder;
+      if (App.engine && oRestart) App.engine.restart = oRestart;
+    }
+    return hit;
+  });
+  check('Ctrl+C / S / B / R 不再误触平仓·下单·重开始',
+        keyProbe.close === 0 && keyProbe.buy === 0 && keyProbe.sell === 0 && keyProbe.restart === 0,
+        JSON.stringify(keyProbe));
+
+  const plainProbe = await page.evaluate(() => {
+    const hit = { buy: 0, sell: 0, restart: 0 };
+    const oOrder = App.placeOrder;
+    const oRestart = App.engine && App.engine.restart;
+    try {
+      App.placeOrder = side => { if (side === 'buy') hit.buy++; else hit.sell++; };
+      if (App.engine) App.engine.restart = () => { hit.restart++; };
+      ['b', 's', 'r'].forEach(key => document.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })));
+    } finally {
+      App.placeOrder = oOrder;
+      if (App.engine && oRestart) App.engine.restart = oRestart;
+    }
+    return hit;
+  });
+  check('B / S / R 三个单键已按用户要求去掉',
+        plainProbe.buy === 0 && plainProbe.sell === 0 && plainProbe.restart === 0,
+        JSON.stringify(plainProbe));
+
   await page.click('#tfGroup button[data-tf="5m"]');
   await waitLoaded(page);
   await page.waitForTimeout(400);
@@ -2721,6 +2895,79 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         && near(live.trade.当前价, live.trade.部分收盘)
         && !near(live.trade.当前价, live.trade.全天收盘),
         JSON.stringify(live.trade || live.err));
+
+  /* ================= v1.2.9 刷新 / 退出回放之后绘图还在 =================
+     用户 2026-10-24:「不小心点退出回放或者刷新了, 再进来我画的趋势线就没了」。
+     原来这条链路有三处会清: 没持久化 + loadAndBuild 里无条件 clearAll + closeReplay 里再清一次。 */
+  /* 上面 v1.2.8 的用例把周期留在了日线, 而这一轮画好的线在 5m 桶里 —— 先切回来 */
+  await page.click('#tfGroup button[data-tf="5m"]');
+  await waitLoaded(page);
+  await page.waitForTimeout(700);
+  /* 中途的绘图用例(中键删除 / 清空全部)已经把线删光了, 这里现画一条 ——
+     要测的是"刷新后还在", 不是"翻旧账" */
+  const boxR = await page.locator('#chartMain').boundingBox();
+  const PR = (dx, dy) => ({ x: boxR.x + dx, y: boxR.y + dy });
+  await page.click('#drawBar button[data-tool="trend"]');
+  await page.mouse.click(PR(300, 200).x, PR(300, 200).y);
+  await page.waitForTimeout(90);
+  await page.mouse.move(PR(400, 260).x, PR(400, 260).y, { steps: 6 });
+  await page.mouse.move(PR(500, 320).x, PR(500, 320).y, { steps: 6 });
+  await page.waitForTimeout(60);
+  await page.mouse.click(PR(500, 320).x, PR(500, 320).y);
+  await page.waitForTimeout(250);
+  /* 推进一步让 savePos 记下"当前在 5m" —— 刷新后开始弹窗是按它恢复周期的,
+     不推进的话存的还是上一个用例留下的 1d, 刷新后自动跳到日线桶(空的) */
+  await page.evaluate(() => App.engine.step(1));
+  await page.waitForTimeout(350);
+
+  const beforeReload = await page.evaluate(async () => {
+    Draw.save();
+    await new Promise(r => setTimeout(r, 1100));     // 等写磁盘的节流窗口
+    return { n: Draw.count(), tf: Draw.tf, items: Draw.snapshot() };
+  });
+  await page.reload({ waitUntil: 'networkidle' });
+  await waitLoaded(page);
+  await page.waitForTimeout(300);
+  await page.click('#startBtn');
+  const reloadOk = await page.waitForFunction(() =>
+    document.getElementById('loadingMask').style.display === 'none' && !!App.engine && App.bars.length > 0,
+    { timeout: 90000 }).then(() => true).catch(() => false);
+  await page.waitForTimeout(700);
+  const reloaded = await page.evaluate(() => ({ n: Draw.count(), tf: Draw.tf, items: Draw.snapshot() }));
+  check('刷新页面 + 重新开始复盘: 画的东西原样回来',
+        reloadOk && beforeReload.n > 0 && reloaded.n === beforeReload.n
+        && reloaded.tf === beforeReload.tf
+        && JSON.stringify(reloaded.items) === JSON.stringify(beforeReload.items),
+        `刷新前 ${beforeReload.n} 根(${beforeReload.tf}) → 刷新后 ${reloaded.n} 根(${reloaded.tf})`);
+
+  const afterClose = await page.evaluate(() => {
+    const n0 = Draw.count();
+    const flat = Trading.pos === 0;
+    if (flat) App.closeReplay();
+    return { n0, flat, closed: !App.engine, n1: Draw.count() };
+  });
+  check('退出回放不清空绘图 (原来这里 Draw.clearAll())',
+        afterClose.flat && afterClose.closed && afterClose.n1 === afterClose.n0 && afterClose.n1 > 0,
+        JSON.stringify(afterClose));
+
+  await page.click('#startBtn');
+  const restartOk = await page.waitForFunction(() =>
+    document.getElementById('loadingMask').style.display === 'none' && !!App.engine,
+    { timeout: 90000 }).then(() => true).catch(() => false);
+  await page.waitForTimeout(700);
+  const afterRestart = await page.evaluate(() => ({ n: Draw.count(), tf: Draw.tf }));
+  check('退出回放再点开始, 线还在 (不用刷新)',
+        restartOk && afterRestart.n === afterClose.n1 && afterRestart.n > 0,
+        JSON.stringify(afterRestart));
+
+  /* 把真实的绘图存档还回去, 别把测试画的线留给用户 */
+  await page.evaluate(async bak => {
+    try {
+      await fetch('/api/draw', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bak) });
+      localStorage.removeItem('es_replay_draw');
+    } catch (e) { }
+  }, drawBackup);
 
   check('无 console 错误', errors.length === 0, errors.slice(0, 3).join(' ; '));
 

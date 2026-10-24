@@ -6,6 +6,8 @@
 - GET  /__ping    探活(启动器用它判断"是不是已经有一个在跑了")
 - GET  /api/journal  读交易账本(data/journal.json)
 - POST /api/journal  写交易账本(原子写: 临时文件 + rename, 断电不会写一半)
+- GET  /api/draw     读绘图存档(data/draw.json, 按周期分桶)
+- POST /api/draw     写绘图存档(同样的原子写)
 - POST /__shutdown 停止服务(页面"退出"按钮 / 停止.vbs 调用)
 - 日志落盘 server.log; 实际端口写入 port.txt 供启动器读取
 """
@@ -20,6 +22,18 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 LOG = open(os.path.join(BASE, 'server.log'), 'a', encoding='utf-8', buffering=1)
 JOURNAL = os.path.join(BASE, 'data', 'journal.json')
 EMPTY_JOURNAL = {'version': 1, 'trades': [], 'orders': []}
+
+# 绘图存档: 键是周期(tf), 值是那个周期上画的图元数组。
+# 用户 2026-10-24 要求「画的东西除非我删掉, 否则一直保留」—— 只靠 localStorage 会被清缓存清掉,
+# 所以跟账本一样落盘 + 原子写。按周期分桶是用户选的行为: 5m 画的只在 5m 出现, 切回 5m 还在。
+DRAW = os.path.join(BASE, 'data', 'draw.json')
+EMPTY_DRAW = {'version': 1, 'byTf': {}, 'updatedAt': 0}
+
+# 统一的「JSON 存档」接口表: 路径 -> (磁盘文件, 文件不存在时的空骨架)
+ARCHIVES = {
+    '/api/journal': ('journal', JOURNAL, EMPTY_JOURNAL),
+    '/api/draw': ('draw', DRAW, EMPTY_DRAW),
+}
 
 
 class Server(ThreadingHTTPServer):
@@ -57,23 +71,24 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path.split('?')[0] == '/__ping':
+        path = self.path.split('?')[0]
+        if path == '/__ping':
             self._plain(b'ok')          # 探活: 启动器据此复用已在跑的服务
             return
-        if self.path.split('?')[0] == '/api/journal':
-            self._journal_get()
+        if path in ARCHIVES:
+            self._file_get(*ARCHIVES[path])
             return
         super().do_GET()
 
-    def _journal_get(self):
+    def _file_get(self, name, filepath, empty):
         try:
-            with open(JOURNAL, 'r', encoding='utf-8') as f:
+            with open(filepath, 'r', encoding='utf-8') as f:
                 body = f.read().encode('utf-8')
         except Exception:
-            body = json.dumps(EMPTY_JOURNAL, ensure_ascii=False).encode('utf-8')
+            body = json.dumps(empty, ensure_ascii=False).encode('utf-8')
         self._plain(body, 'application/json; charset=utf-8')
 
-    def _journal_post(self):
+    def _file_post(self, name, filepath, empty):
         try:
             n = int(self.headers.get('Content-Length') or 0)
             raw = self.rfile.read(n) if n else b''
@@ -81,25 +96,25 @@ class Handler(SimpleHTTPRequestHandler):
             if not isinstance(obj, dict):
                 raise ValueError('not an object')
         except Exception as e:
-            self.send_error(400, 'bad journal: %s' % e)
+            self.send_error(400, 'bad %s: %s' % (name, e))
             return
         try:
-            os.makedirs(os.path.dirname(JOURNAL), exist_ok=True)
-            tmp = JOURNAL + '.tmp'
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            tmp = filepath + '.tmp'
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(obj, f, ensure_ascii=False)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(tmp, JOURNAL)          # 原子替换: 断电不会留下半个文件
+            os.replace(tmp, filepath)         # 原子替换: 断电不会留下半个文件
             self._plain(b'{"ok":true}', 'application/json')
         except Exception as e:
-            LOG.write('journal write failed: %s\n' % e)
+            LOG.write('%s write failed: %s\n' % (name, e))
             self.send_error(500, 'write failed')
 
     def do_POST(self):
         path = self.path.split('?')[0]
-        if path == '/api/journal':
-            self._journal_post()
+        if path in ARCHIVES:
+            self._file_post(*ARCHIVES[path])
         elif path == '/__shutdown':
             self._plain(b'{"ok":true}', 'application/json')
             LOG.write('shutdown requested\n')
