@@ -3272,6 +3272,35 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         tomb.after === tomb.n0 - 1 && tomb.tombAfter === tomb.pit0,
         `${tomb.n0} → ${tomb.after} 笔, 墓碑 ${tomb.pit0} → ${tomb.tombAfter}`);
 
+  /* save() 落盘前自净: 内存里躺着已立碑的记录时, 不能被整份 POST 回磁盘。
+     这是 2026-10-25 那 15 笔假单「明明删了却还在 journal.json 里」的根因。 */
+  const heal = await page.evaluate(() => {
+    const oPost = Journal._post, oLocal = Journal._writeLocal;
+    Journal._post = () => { };
+    Journal._writeLocal = () => { };
+    try {
+      const t = Journal.addTrade({
+        sessionId: 'S_HEAL_PROBE', side: 'long', tf: '5m', session: 'rth',
+        entryTime: '2024-05-01 11:00 ET', entryEpoch: 1714575600, entryPrice: 5000,
+        exitTime: '2024-05-01 11:05 ET', exitEpoch: 1714575900, exitPrice: 5003,
+        qty: 1, points: 3, r: 3, usd: 150, note: 'selfheal-probe',
+      });
+      const id = t.id;
+      Journal.data.deleted.push(id);          // 立碑, 但记录仍留在内存里
+      const before = Journal.data.trades.length;
+      Journal.save();                          // 落盘入口 → 应该顺手把这它剔掉
+      const after = Journal.data.trades.length;
+      const gone = !Journal.data.trades.some(x => x.id === id);
+      Journal.data.deleted = Journal.data.deleted.filter(x => x !== id);
+      return { before, after, gone };
+    } finally {
+      Journal._post = oPost; Journal._writeLocal = oLocal;
+    }
+  });
+  check('save() 落盘前按墓碑自净, 已删记录不会被重新写进磁盘',
+        heal.gone === true && heal.after === heal.before - 1,
+        `${heal.before} → ${heal.after} 笔, 已剔除=${heal.gone}`);
+
   /* 把真实的绘图存档还回去, 别把测试画的线留给用户 */
   await page.evaluate(async bak => {
     try {

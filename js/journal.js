@@ -343,9 +343,32 @@ const Journal = {
 
   /** 关浏览器不丢的即时层; 磁盘写是异步的, 失败静默 */
   save() {
+    this._selfHeal();
     this._writeLocal();
     this._post();
     this.onChange && this.onChange();
+  },
+
+  /** 落盘前按墓碑自净 (2026-10-25 加)。
+   *
+   *  内存里完全可能还躺着「已经删掉」的记录:
+   *    ① load() 的并集刚把它们从 localStorage 带回来;
+   *    ② 磁盘被外部脚本改小之后页面没刷新, 内存还是旧的那份;
+   *  这时整份 POST 出去, 等于把墓碑删掉的东西又原样写回磁盘 ——
+   *  下次 load() 虽然还会被墓碑挡住 (显示是对的), 但 journal.json 已经脏了,
+   *  事后排查会被这堆「明明删了却还在文件里」的记录误导。
+   *  那 15 笔假单就是这么躺进磁盘的, 加上这道闸以后写出去的永远是干净的那份。
+   */
+  _selfHeal() {
+    if (!this.data) return;
+    const gone = new Set(this.data.deleted || []);
+    if (!gone.size) return;
+    for (const k of ['trades', 'orders']) {
+      const arr = this.data[k] || [];
+      /* 只丢墓碑点名的 id; 没有 id 的异常记录不要顺手扔, 宁可留着让人看见 */
+      const kept = arr.filter(r => !(r && r.id && gone.has(r.id)));
+      if (kept.length !== arr.length) this.data[k] = kept;
+    }
   },
 
   _writeLocal() {
