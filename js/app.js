@@ -568,7 +568,10 @@ const App = {
     }
     if (tool === 'trash') {
       const n = Draw.removeAll();
-      this.toast(n ? `已删除 ${n} 个绘图` : '当前没有绘图');
+      /* 文案要跟实际行为对齐: v1.2.9 起绘图按周期分桶存, removeAll 只清当前这个周期
+         (和 TradingView 一致 —— 它的绘图也是绑 symbol+interval 的)。以前写「删除所有绘图」,
+         在 1d 上点完切回 5m 线还在, 会让人以为没删掉。 */
+      this.toast(n ? `已删除本周期 ${n} 个绘图` : '本周期没有绘图');
       this.syncToolUI(); return;
     }
   },
@@ -2093,7 +2096,11 @@ const App = {
    *  用户 2026-10-24: 原来入场出场同色, 分不清 → 出场改灰。 */
   addMarker(side, price, isExit) {
     const cur = this.engine.current;
-    const isDay = (this.tf === '1d' || this.tf === '1w');
+    /* 日线以上(含 3 天 / 月线)的 bar.t 是 'yyyy-MM-dd' 字符串, 不是 chartTime 秒值 ——
+       这里原来只判了 1d / 1w, 3d 和 1M 上会生成一条 time 为数字的 marker,
+       和任何一根 K 线都对不上 (画不出来), 还会把 markers 排成数字+字符串混序。
+       口径与 rebuildMarkers / chart.js 的 setTf 保持一致 (2026-10-25 审计发现)。 */
+    const isDay = (this.tf === '1d' || this.tf === '3d' || this.tf === '1w' || this.tf === '1M');
     const t = isDay ? etDateStr(cur.epoch, cur.off) : chartTime(cur.epoch, cur.off);
     const m = ChartMgr.markers.slice();
     m.push({

@@ -444,6 +444,12 @@ const Draw = {
     this.selected = null; this.draft = null; this._drag = null;
     /* 撤销栈不跨会话: 刷新完还能撤销到"上一根线"只会让人困惑 (而且 undo 里的图元可能是别的周期的) */
     this.undo = []; this.redo = [];
+    /* 剪贴板同理, 而且更危险: 图元锚点的时间口径是**周期相关**的 ——
+       日内是 chartTime(epoch, off) 的秒值, 日/周/月线是 'yyyy-MM-dd' 字符串。
+       跨周期粘贴出来的那根, 时间戳对不上任何 bar → xOf() 返回 null → 画不出来,
+       却实实在在占了一条 items (看不见、拖不动、只能靠"清空全部"清掉)。
+       2026-10-25 审计实测确认: 5m 复制 → 切 1d → 粘贴, n 从 0 变 1, 图上什么都没有。 */
+    this._clip = null;
     // id / z 计数器要跳过已装回来的, 否则新画的会跟存档里的撞 id
     let mx = 0, mz = 0;
     for (const it of this.items) {
@@ -472,6 +478,11 @@ const Draw = {
   paste() {
     const c = this._clip;
     if (!c) return null;
+    /* 第二道闸 (第一道在 restore 里清 _clip): 时间口径对不上就直接拒绝。
+       宁可不粘, 也不要留一根「看不见、拖不动、只能清空全部」的幽灵图元。 */
+    const bars = ChartMgr._lastData;
+    const curIsStr = !!(bars && bars.length && typeof bars[0].t === 'string');
+    if ((typeof c.a.t === 'string') !== curIsStr) return null;
     const mv = pt => {
       if (!pt) return pt;
       let t = pt.t;

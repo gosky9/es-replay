@@ -16,6 +16,39 @@ function check(name, ok, detail) {
 const num = s => +(String(s).split('/')[0].trim());
 const waitLoaded = page => page.waitForFunction(
   () => document.getElementById('loadingMask').style.display === 'none', { timeout: 40000 });
+
+/* ---------------------------------------------------------------- 存档兜底
+ * 这个测试会真的下单、真的画图, 所以开头把 /api/journal 与 /api/draw 备份下来清空。
+ * 但「备份 → 清空 → ... → 还原」是一条直线, 中间任何一步抛异常, 进程直接退出,
+ * 用户真实的练习账本就被留成空文件了 —— 2026-10-25 真的发生了一次 (不是本文件,
+ * 是一次性探针脚本; 但本文件结构一样危险)。
+ * 所以: 备份存到模块级 BAK, 异常出口 (catch / uncaughtException / beforeExit)
+ * 一律先同步把两张存档写回去, 再退出。 */
+let BAK = null;
+async function emergencyRestore(tag) {
+  if (!BAK) return;
+  const post = async (path, body) => {
+    try {
+      const r = await fetch(BASE + path, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return r.ok;
+    } catch (e) { return false; }
+  };
+  const a = await post('/api/journal', BAK.journal);
+  const b = await post('/api/draw', BAK.draw);
+  console.error(`[兜底还原] ${tag || ''} journal=${a ? 'ok' : 'FAIL'} draw=${b ? 'ok' : 'FAIL'}`);
+}
+process.on('uncaughtException', e => {
+  console.error('未捕获异常:', e);
+  emergencyRestore('uncaughtException').finally(() => process.exit(2));
+});
+process.on('unhandledRejection', e => {
+  console.error('未处理的 Promise 拒绝:', e);
+  emergencyRestore('unhandledRejection').finally(() => process.exit(2));
+});
+
 /* v1.1: 下单前必须打标 (setup + 市场周期) —— 测试里直接预置, 免得每次都走弹窗 */
 const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c]) => {
   App.pendingSetup = i; App.pendingCycle = c; App.syncSetupUI();
@@ -56,6 +89,8 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
     await fetch('/api/draw', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ version: 1, byTf: {}, updatedAt: 0 }) });
   });
+  /* 备份交给模块级 BAK: 下面任何一步抛异常, 异常出口都能把这两张存档原样写回去 */
+  BAK = { journal: journalBackup, draw: drawBackup };
   check('开始弹窗显示', await page.isVisible('#startModal'));
   check('还没开始复盘时底栏日号条是隐藏的', await page.evaluate(() =>
     document.getElementById('dayStrip').classList.contains('hidden')
@@ -1039,10 +1074,10 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   await page.click('#indBarCount');
   await page.waitForTimeout(120);
 
-  // 一键删除全部绘图
+  // 一键删除本周期绘图
   await page.click('#drawBar button[data-tool="trash"]');
   await page.waitForTimeout(120);
-  check('一键删除全部绘图', (await page.evaluate(() => Draw.count())) === 0);
+  check('一键删除本周期绘图', (await page.evaluate(() => Draw.count())) === 0);
 
   /* ---------- v1.2.9 绘图存档: 按周期分桶 (用户 2026-10-24) ----------
      原行为「换周期就清空」；现在是「各周期各存各的: 切走看不到, 切回来原样还在」。 */
@@ -1190,6 +1225,99 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         `Δx=${pasteRes.dx && pasteRes.dx.toFixed(1)}px Δp=${pasteRes.dp && pasteRes.dp.toFixed(2)}`);
   check('副本是独立图元 (自己的 id), 不是共享同一个对象',
         new Set(pasteRes.ids).size === 2, JSON.stringify(pasteRes.ids));
+
+  /* 跨周期粘贴: 锚点的时间口径不同 (日内是 chartTime 秒值 / 日线是 'yyyy-MM-dd' 串),
+     以前会粘出一根画不出来的「幽灵图元」—— items 里多一条, 图上一个像素都没有。 */
+  const crossPaste = await page.evaluate(async () => {
+    const it = Draw.items.filter(i => i.type === 'trend')[0];
+    Draw.selected = it.id;
+    Draw.copySelected();
+    const hasClip = !!Draw._clip;
+    await App.switchTf('1d');
+    const remained = !!Draw._clip;          // restore() 应该已经把它清了
+    const pasted = Draw.paste();            // 就算还在, paste 也要拒绝
+    return { hasClip, remained, pasted: !!pasted, tf: App.tf, n: Draw.count() };
+  });
+  check('切周期后剪贴板作废, 粘不出一根看不见的幽灵图元',
+        crossPaste.hasClip === true && crossPaste.remained === false
+        && crossPaste.pasted === false && crossPaste.n === 0,
+        JSON.stringify(crossPaste));
+
+  /* ---------- 日线/日期串锚点: 拖动 / 复制 / 删除本周期 ----------
+     上面那批用例都跑在 5m 上: 锚点 t 是 chartTime 的秒值。日/周/月线的 t 是 'yyyy-MM-dd'
+     字符串, 换算走的是另一条分支 (_epochOfDateStr / etDateStr)。只测 5m 的话,
+     「日期串被写成数字」「日线上拖不动」这类回归永远测不出来。 */
+  await page.click('#drawBar button[data-tool="trend"]');
+  await draw2(P(260, 200), P(520, 340));
+  const onDaily = await page.evaluate(() => {
+    const it = Draw.items[0];
+    const pa = it && Draw._px(it.a), pb = it && Draw._px(it.b);
+    const r = Draw.canvas.getBoundingClientRect();
+    return {
+      n: Draw.count(), tf: App.tf, a: it && it.a, b: it && it.b,
+      isStr: typeof (it && it.a && it.a.t) === 'string',
+      mx: pa && pb ? r.left + (pa.x + pb.x) / 2 : null,
+      my: pa && pb ? r.top + (pa.y + pb.y) / 2 : null,
+    };
+  });
+  check('日线上画线: 锚点用日期串, 不是日内秒值',
+        onDaily.n === 1 && onDaily.tf === '1d' && onDaily.isStr
+        && /^\d{4}-\d{2}-\d{2}$/.test(onDaily.a.t) && /^\d{4}-\d{2}-\d{2}$/.test(onDaily.b.t),
+        JSON.stringify(onDaily.a) + ' ~ ' + JSON.stringify(onDaily.b));
+
+  await page.mouse.move(onDaily.mx, onDaily.my);
+  await page.mouse.down();
+  await page.mouse.move(onDaily.mx + 60, onDaily.my - 30, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForTimeout(220);
+  const dailyDrag = await page.evaluate(() => {
+    const it = Draw.items[0];
+    return {
+      a: it && it.a, b: it && it.b, id: it && it.id,
+      types: [typeof (it && it.a.t), typeof (it && it.b.t)],
+    };
+  });
+  check('日线上也能左右拖, 拖完锚点还是日期串 (不会被写成数字/NaN)',
+        dailyDrag.types[0] === 'string' && dailyDrag.types[1] === 'string'
+        && dailyDrag.a.t !== onDaily.a.t && dailyDrag.b.t !== onDaily.b.t
+        && dailyDrag.a.p !== onDaily.a.p,
+        `${onDaily.a.t} → ${dailyDrag.a.t} / Δp ${(dailyDrag.a.p - onDaily.a.p).toFixed(2)}`);
+
+  const dailyCopy = await page.evaluate(() => {
+    const it = Draw.items[0];
+    Draw.selected = it.id; Draw.copySelected();
+    const c = Draw.paste();
+    const arr = Draw.items.filter(i => i.type === 'trend');
+    return {
+      n: arr.length, t: c && c.a.t, isStr: typeof (c && c.a.t) === 'string',
+      r: c && Draw._px(c.a) ? true : false,
+      same: c && it ? c.a.t === it.a.t : null,
+    };
+  });
+  check('日线上复制粘贴: 副本仍是日期串锚点, 且和原图错开 3 根',
+        dailyCopy.n === 2 && dailyCopy.isStr && dailyCopy.r && dailyCopy.same === false,
+        JSON.stringify(dailyCopy));
+
+  /* 垃圾桶: v1.2.9 起绘图按周期分桶, 它只能清「当前这个周期」(和 TradingView 一致 ——
+     TV 的绘图也是绑 symbol+interval 的)。以前按钮写「删除所有绘图」, 在日线上点完切回 5m
+     线还在, 会以为没删掉; 现在文案和 toast 都改成「本周期」。 */
+  const otherBucket = await page.evaluate(() => {
+    const o = JSON.parse(localStorage.getItem('es_replay_draw') || '{}');
+    return (o.byTf && o.byTf['5m'] || []).length;
+  });
+  await page.click('#drawBar button[data-tool="trash"]');
+  await page.waitForTimeout(150);
+  const trashRes = await page.evaluate(() => {
+    const o = JSON.parse(localStorage.getItem('es_replay_draw') || '{}');
+    return {
+      cur: Draw.count(), tf: App.tf,
+      m5: (o.byTf && o.byTf['5m'] || []).length,
+      d1: (o.byTf && o.byTf['1d'] || []).length,
+    };
+  });
+  check('垃圾桶只清当前周期, 别的周期那桶一根不动',
+        otherBucket > 0 && trashRes.cur === 0 && trashRes.d1 === 0 && trashRes.m5 === otherBucket,
+        `${JSON.stringify(trashRes)} (删之前 5m 有 ${otherBucket} 根)`);
 
   /* ---------- v1.2.9 快捷键: Ctrl 组合绝不能再落进单键分支 ----------
      原来 Ctrl+C 的 e.key 就是 'c', 会直接 closePosition() —— 想复制一根线结果平了仓。 */
@@ -3062,6 +3190,30 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   check('再从 ETH 切回 RTH 也还在 15:55 (来回都不漂)',
         backRth.session === 'rth' && backRth.cur === '2024-01-22 15:55 ET', JSON.stringify(backRth));
 
+  /* 2026-10-25 审计: addMarker 的 isDay 原来只判了 1d/1w, 漏了 3d 和 1M ——
+     那两类周期的 bar.t 是 'yyyy-MM-dd' 字符串, 用 chartTime 数字生成 marker 会一条都对不上。 */
+  const mkDay = await page.evaluate(async () => {
+    const out = {};
+    for (const tf of ['3d', '1M']) {
+      await App.switchTf(tf);
+      /* 先清空: ChartMgr.setMarkers 会按 time 排序, 直接取最后一条拿到的是账本里
+         时间最大的那条旧 marker, 不是刚加的这条 */
+      ChartMgr.setMarkers([]);
+      App.addMarker('buy', 5000, false);
+      const m = ChartMgr.markers[0] || {};
+      const bars = ChartMgr._lastData || [];
+      out[tf] = { time: m.time, type: typeof m.time, hit: bars.some(b => b.t === m.time), n: bars.length };
+    }
+    await App.switchTf('5m');
+    ChartMgr.setMarkers([]);
+    App.rebuildMarkers();
+    return out;
+  });
+  check('3天/月线上的成交标记用日期串, 对得上真实 K 线 (原来生成的是对不上的数字)',
+        mkDay['3d'].type === 'string' && mkDay['3d'].hit === true
+        && mkDay['1M'].type === 'string' && mkDay['1M'].hit === true,
+        JSON.stringify(mkDay));
+
   /* 把真实的绘图存档还回去, 别把测试画的线留给用户 */
   await page.evaluate(async bak => {
     try {
@@ -3070,6 +3222,7 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
       localStorage.removeItem('es_replay_draw');
     } catch (e) { }
   }, drawBackup);
+  BAK = null;      // 两张存档都还原完了, 关掉兜底 (免得异常出口再写一遍)
 
   check('无 console 错误', errors.length === 0, errors.slice(0, 3).join(' ; '));
 
@@ -3077,4 +3230,8 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   const fails = results.filter(r => !r.ok).length;
   console.log(`\n==== ${results.length - fails}/${results.length} 通过 ====`);
   process.exit(fails ? 1 : 0);
-})().catch(e => { console.error('E2E 异常:', e); process.exit(2); });
+})().catch(async e => {
+  console.error('E2E 异常:', e);
+  await emergencyRestore('catch');        // 见文件头: 任何异常出口都要把两张存档写回去
+  process.exit(2);
+});
