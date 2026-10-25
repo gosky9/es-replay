@@ -11,6 +11,7 @@ const Draw = {
   zseq: 1,                   // 层叠序: 后画的在上, 点中即置顶 (不吸附固定图层)
   tool: 'cursor',            // cursor|trend|hline|vline|rect|fib|text|measure
   magnet: false,
+  SNAP_PTS: 3,               // 磁吸半径(价格点): 光标离开高低收超过 3 点就不吸
   hidden: false,
   showBarCount: true,
   draft: null,
@@ -278,14 +279,20 @@ const Draw = {
     return (x == null || y == null) ? null : { x, y };
   },
 
-  /** 磁吸: 吸附到最近 bar 的开高低收 */
+  /** 磁吸: 吸附到最近 bar 的开高低收, 但只在光标离它 3 个**价格点**以内才吸。
+   *
+   *  阈值是价格点 (ES 1 点 = 1.00 = 4 个 tick), 不是屏幕像素 ——
+   *  同一个 3 点在放大/缩小时屏幕高度差很多, 按像素算会导致「缩得越小吸得越死」。
+   *  之前这里没有阈值, 只要落点在同一根 K 线的 x 上, 不管高低都被拽到最近的 o/h/l/c,
+   *  用户 2026-10-25 的原话是「磁吸吸得太猛了，只要在一条 x 轴上都会被吸过去」。
+   */
   snapPrice(x, y) {
     const raw = this.pOf(y);
     if (!this.magnet) return raw;
     const bars = ChartMgr._lastData;
     if (!bars || !bars.length) return raw;
     const t = this.timeAtX(x);
-    let best = null, bd = Infinity;
+    let best = null;
     for (let i = 0; i < bars.length; i++) {
       if (bars[i].t === t) { best = bars[i]; break; }
     }
@@ -293,10 +300,11 @@ const Draw = {
     const cands = [best.o, best.h, best.l, best.c];
     let out = raw, md = Infinity;
     for (const c of cands) {
-      const d = Math.abs(c - raw);
+      if (c == null || !isFinite(c)) continue;
+      const d = Math.abs(c - raw);             // 价格差 (点)
       if (d < md) { md = d; out = c; }
     }
-    return out;
+    return md <= this.SNAP_PTS ? out : raw;
   },
 
   /* ---------- 工具切换 ---------- */

@@ -939,6 +939,37 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         afterTrend.n === 1 && afterTrend.type === 'trend' && afterTrend.tool === 'cursor',
         JSON.stringify(afterTrend));
 
+  /* 磁吸阈值 (v1.2.16): 只在光标离 o/h/l/c 的**价格差** ≤3 点时才吸。
+     原来是「落在同一根 K 线的 x 上就必吸」, 用户 2026-10-25 报「吸得太猛」。 */
+  const snapProbe = await page.evaluate(() => {
+    const bars = ChartMgr._lastData;
+    if (!bars || !bars.length) return { err: '没有 K 线数据' };
+    const b = bars[Math.max(0, bars.length - 20)];
+    const x = Draw.xOf(b.t);
+    if (x == null) return { err: '这根 K 线的 x 取不到' };
+    const cands = [b.o, b.h, b.l, b.c].filter(v => v != null && isFinite(v));
+    const yOfP = p => Draw.yOf(p);
+
+    const pNear = b.c + 1;                     // 离收盘价 1 点 → 该吸
+    const pFar = Math.max(...cands) + 5;       // 离最近的高点也有 5 点 → 不该吸
+
+    const old = Draw.magnet;
+    Draw.magnet = true;
+    try {
+      const near = Draw.snapPrice(x, yOfP(pNear));
+      const far = Draw.snapPrice(x, yOfP(pFar));
+      const farRaw = Draw.pOf(yOfP(pFar));
+      return {
+        pts: Draw.SNAP_PTS, c: b.c, near, far, farRaw,
+        okNear: cands.some(c => Math.abs(c - near) < 1e-6) && Math.abs(near - pNear) > 1e-6,
+        okFar: Math.abs(far - farRaw) < 1e-6,
+      };
+    } finally { Draw.magnet = old; }
+  });
+  check('磁吸只在 3 点以内生效: 偏离超过 3 点就原样落点, 不再被硬拽',
+        snapProbe.pts === 3 && snapProbe.okNear === true && snapProbe.okFar === true,
+        JSON.stringify(snapProbe));
+
   // 尺子 (只保留最新一次)
   await page.click('#drawBar button[data-tool="measure"]');
   await draw2(P(520, 200), P(700, 320));
