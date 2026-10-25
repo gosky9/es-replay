@@ -970,6 +970,23 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         snapProbe.pts === 3 && snapProbe.okNear === true && snapProbe.okFar === true,
         JSON.stringify(snapProbe));
 
+  /* 弹窗遮罩只压暗、不做背景模糊 (v1.2.17)。
+     用户 2026-10-26: 入场选 setup 时后面的 K 线糊了, 看得见看不清反而更费劲。
+     backdrop-filter 一旦被加回来, 这里会红。 */
+  const maskCss = await page.evaluate(() => {
+    /* 挂一个临时节点直接量类定义 —— 不依赖某个弹窗此刻是不是 display:none */
+    const d = document.createElement('div');
+    d.className = 'modal-mask';
+    document.body.appendChild(d);
+    const cs = getComputedStyle(d);
+    const out = { bf: cs.backdropFilter || cs.webkitBackdropFilter || 'none', bg: cs.backgroundColor };
+    d.remove();
+    return out;
+  });
+  check('弹窗遮罩不模糊背景(只压暗), 后面 K 线保持清晰',
+        maskCss.bf === 'none' && /rgba\(19,\s*23,\s*34/.test(maskCss.bg),
+        JSON.stringify(maskCss));
+
   // 尺子 (只保留最新一次)
   await page.click('#drawBar button[data-tool="measure"]');
   await draw2(P(520, 200), P(700, 320));

@@ -351,10 +351,11 @@ body[data-theme="dark"] .tv-sell-btn { background: #2a2e39; }
 .trade-empty { color: var(--text-dim); text-align: center; padding: 24px 0; font-size: 12px; }
 
 /* ============ 弹窗 ============ */
+/* 遮罩只压暗, 不做背景模糊 (用户 2026-10-26: 入场选 setup 的时候后面的 K 线糊了,
+   看得见但看不清, 反而更费劲; 只压暗就够把弹窗拎出来了)。 */
 .modal-mask {
   position: fixed; inset: 0; background: rgba(19,23,34,.42);
   display: flex; align-items: center; justify-content: center; z-index: 100;
-  backdrop-filter: blur(2px);
 }
 .modal {
   position: relative;
