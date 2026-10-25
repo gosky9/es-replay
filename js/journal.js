@@ -255,7 +255,7 @@ const Setups = {
 const Journal = {
   DB: 'es_replay_journal',
   API: '/api/journal',
-  data: { version: 1, trades: [], orders: [] },
+  data: { version: 1, trades: [], orders: [], deleted: [] },
   loaded: false,
   onChange: null,
   _posting: null, _dirty: false,
@@ -297,21 +297,27 @@ const Journal = {
   },
 
   _norm(d) {
-    if (!d || typeof d !== 'object') return { version: 1, trades: [], orders: [] };
+    if (!d || typeof d !== 'object') return { version: 1, trades: [], orders: [], deleted: [] };
     return {
       version: d.version || 1,
       trades: Array.isArray(d.trades) ? d.trades : [],
       orders: Array.isArray(d.orders) ? d.orders : [],
+      /* 墓碑: 已经删掉的 id。合并时永远过滤掉它们。
+         没有这一层的话, 删掉一条只是从磁盘消失了, 而浏览器 localStorage 里那条还在,
+         下次 load() 的「并集」会把它原样带回来 —— 用户会以为删除根本没生效
+         (2026-10-25 清那 9 笔测试残留时就踩到了)。 */
+      deleted: Array.isArray(d.deleted) ? d.deleted.filter(x => typeof x === 'string') : [],
     };
   },
 
-  /** 按 id 去重合并; 同 id 以 b 为准 (导入/磁盘通常更新) */
+  /** 按 id 去重合并; 同 id 以 b 为准 (导入/磁盘通常更新)。墓碑取并集, 且优先于一切记录 */
   _merge(a, b) {
-    const out = { version: 1, trades: [], orders: [] };
+    const gone = new Set([...(a.deleted || []), ...(b.deleted || [])]);
+    const out = { version: 1, trades: [], orders: [], deleted: [...gone] };
     for (const k of ['trades', 'orders']) {
       const m = new Map();
-      for (const r of (a[k] || [])) if (r && r.id) m.set(r.id, r);
-      for (const r of (b[k] || [])) if (r && r.id) m.set(r.id, r);
+      for (const r of (a[k] || [])) if (r && r.id && !gone.has(r.id)) m.set(r.id, r);
+      for (const r of (b[k] || [])) if (r && r.id && !gone.has(r.id)) m.set(r.id, r);
       out[k] = [...m.values()];
     }
     out.trades.sort((x, y) => (x.exitEpoch || 0) - (y.exitEpoch || 0));
@@ -487,8 +493,25 @@ const Journal = {
     return { ok: true, added: after - before, total: after };
   },
 
+  /** 删掉指定的交易/挂单 (按 id), 返回实际删掉的条数。
+   *
+   *  被删的 id 记进墓碑 `deleted`, 合并时永远过滤 —— 否则浏览器 localStorage 里
+   *  那份会在下次 load() 的并集里把它们原样带回来 (删了又回来)。
+   *  目前只在「清理测试残留」这类脚本里调用, 界面上没有单条删除的入口。 */
+  purge(ids) {
+    const set = new Set((ids || []).filter(x => typeof x === 'string'));
+    if (!set.size) return 0;
+    const before = this.data.trades.length + this.data.orders.length;
+    this.data.deleted = [...new Set([...(this.data.deleted || []), ...set])];
+    this.data.trades = this.data.trades.filter(t => !set.has(t.id));
+    this.data.orders = this.data.orders.filter(o => !set.has(o.id));
+    const after = this.data.trades.length + this.data.orders.length;
+    this.save();
+    return before - after;
+  },
+
   clear() {
-    this.data = { version: 1, trades: [], orders: [] };
+    this.data = { version: 1, trades: [], orders: [], deleted: [] };
     this.save();
   },
 };

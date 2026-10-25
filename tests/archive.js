@@ -30,12 +30,14 @@ function born(id) {
  * @returns {{version:number,trades:Array,orders:Array}}
  */
 function mergeJournal(backup, current, runStart) {
-  const out = { version: 1, trades: [], orders: [] };
+  /* 墓碑 (已删掉的 id) 也要并集: 还原时把 deleted 弄丢, 等于把用户删掉的记录放回去 */
+  const gone = new Set([...((backup && backup.deleted) || []), ...((current && current.deleted) || [])]);
+  const out = { version: 1, trades: [], orders: [], deleted: [...gone] };
   for (const k of ['trades', 'orders']) {
     const m = new Map();
-    for (const r of ((backup && backup[k]) || [])) if (r && r.id) m.set(r.id, r);
+    for (const r of ((backup && backup[k]) || [])) if (r && r.id && !gone.has(r.id)) m.set(r.id, r);
     for (const r of ((current && current[k]) || [])) {
-      if (!r || !r.id || m.has(r.id)) continue;
+      if (!r || !r.id || m.has(r.id) || gone.has(r.id)) continue;
       const t = born(r.id);
       // 解不出时间的也留着: 宁可多留一条, 不要少一条用户的记录
       if (!Number.isFinite(t) || t < runStart) m.set(r.id, r);

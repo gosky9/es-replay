@@ -3231,6 +3231,47 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         && mkDay['1M'].type === 'string' && mkDay['1M'].hit === true,
         JSON.stringify(mkDay));
 
+  /* ---------- 墓碑: 删掉的记录不能被 localStorage 的并集带回来 (v1.2.14) ----------
+     2026-10-25 清 9 笔测试残留时发现: 只从磁盘删是删不掉的 —— 浏览器 localStorage
+     里那条还在, 下次 load() 的「并集」会把它原样带回来。
+     Journal.purge() 把 id 记进 deleted, _merge() 永远过滤它。 */
+  const tomb = await page.evaluate(() => {
+    /* ⚠️ purge() 内部会 save() —— 而这时内存里的 Journal 装着整套测试造的交易,
+       一 save 就把它们全 POST 到磁盘了 (第一次写这条用例时确实泄漏了 16 笔)。
+       这里把 save 挡掉, 只在内存里验证语义。 */
+    const oSave = Journal.save;
+    Journal.save = () => { };
+    try {
+      const t = Journal.addTrade({
+        sessionId: 'S_TOMB_PROBE', side: 'long', tf: '5m', session: 'rth',
+        entryTime: '2024-05-01 10:00 ET', entryEpoch: 1714572000, entryPrice: 5000,
+        exitTime: '2024-05-01 10:05 ET', exitEpoch: 1714572300, exitPrice: 5002,
+        qty: 1, points: 2, r: 2, usd: 100, note: 'tombstone-probe',
+      });
+      const n0 = Journal.data.trades.length;
+      const pit0 = Journal.data.deleted.length;
+      const removed = Journal.purge([t.id]);
+      // 装作浏览器 localStorage 里还留着这条
+      const ls = JSON.parse(localStorage.getItem('es_replay_journal') || '{}');
+      ls.trades = (ls.trades || []).concat([t]);
+      const merged = Journal._merge(Journal._norm(ls), Journal._norm(Journal.data));
+      const back = merged.trades.some(x => x.id === t.id);
+      // 收尾: 把这条探针的墓碑摘掉, 别往真实账本里攒垃圾 id
+      Journal.data.deleted = Journal.data.deleted.filter(x => x !== t.id);
+      return {
+        n0, pit0, removed, back,
+        after: Journal.data.trades.length, tombAfter: Journal.data.deleted.length,
+      };
+    } finally {
+      Journal.save = oSave;
+    }
+  });
+  check('purge 删掉的记录被墓碑压住, localStorage 并集也带不回来',
+        tomb.removed === 1 && tomb.back === false, JSON.stringify(tomb));
+  check('墓碑只过滤被删的那个 id, 别的记录照常入账',
+        tomb.after === tomb.n0 - 1 && tomb.tombAfter === tomb.pit0,
+        `${tomb.n0} → ${tomb.after} 笔, 墓碑 ${tomb.pit0} → ${tomb.tombAfter}`);
+
   /* 把真实的绘图存档还回去, 别把测试画的线留给用户 */
   await page.evaluate(async bak => {
     try {
