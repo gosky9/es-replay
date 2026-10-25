@@ -7,8 +7,10 @@
  *    当"用户原有存档"备份还原回去, 于是一直清不掉 (累计 9 条)。
  */
 const { chromium } = require('playwright');
+const { mergeJournal } = require('./archive');
 const BASE = 'http://127.0.0.1:8899';
 const OUT = p => __dirname + '/../' + p;
+const RUN_START = Date.now();
 
 const EMPTY_JOURNAL = { version: 1, trades: [], orders: [] };
 const EMPTY_DRAW = { version: 1, byTf: {}, updatedAt: 0 };
@@ -40,15 +42,22 @@ const EMPTY_DRAW = { version: 1, byTf: {}, updatedAt: 0 };
   }, [EMPTY_JOURNAL, EMPTY_DRAW]);
 
   const restore = async () => {
+    /* 账本走并集 (见 tests/archive.js): 备份 ∪ 创建时间早于本轮开跑的记录。
+       直接覆盖会把用户在这期间自己做的交易一起抹掉 (2026-10-25 丢了 3 笔)。 */
+    let cur = null;
+    try {
+      const r = await fetch(BASE + '/api/journal', { cache: 'no-store' });
+      if (r.ok) cur = await r.json();
+    } catch (e) { }
+    const merged = mergeJournal(backup.j, cur, RUN_START);
     await page.evaluate(async ([j, d]) => {
       const post = (u, body) => fetch(u, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       }).catch(() => { });
       await post('/api/journal', j); await post('/api/draw', d);
-    }, [backup.j, backup.d]).catch(() => { });
-    console.log('存档已还原: journal', (backup.j.trades || []).length, '笔 /',
-      Object.keys(backup.d.byTf || {}).length, '个周期的绘图');
+    }, [merged, backup.d]).catch(() => { });
+    console.log('存档已还原: journal', merged.trades.length, '笔 /', merged.orders.length, '条挂单');
   };
 
   try {

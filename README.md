@@ -3,7 +3,7 @@
 基于 CME E-mini S&P 500 (ES) 1 分钟历史数据的**本地复盘练习工具**：随机/自选一段行情，
 像 TradingView 的 Bar Replay 一样逐根播放，同时支持下单、持仓盈亏、交易记录统计。
 
-> 当前版本 **v1.2.12**（2026-10-25）。逐版改动记录见文末 **[更新记录](#更新记录)**，或 `git tag` / 根目录 `VERSION` 文件。
+> 当前版本 **v1.2.13**（2026-10-25）。逐版改动记录见文末 **[更新记录](#更新记录)**，或 `git tag` / 根目录 `VERSION` 文件。
 
 ## 快速开始
 
@@ -356,7 +356,8 @@ es-replay/
 │   └── journal.json        交易账本(自动生成, 不入库)
 ├── preprocess.py           数据预处理(主力拼接→复权→10 周期聚合)
 ├── validate.py             数据校验脚本
-├── tests/e2e.js            Playwright 端到端测试(217 项)
+├── tests/e2e.js            Playwright 端到端测试(253 项)
+├── tests/archive.js        测试存档还原: 账本按「并集」写回, 不覆盖用户的记录
 ├── tests/visual_check.js   视觉核验截图(黑白盘面/绘图/突破单)
 ├── reference/             用户给的参考截图 + 1:1 对照清单
 └── server.log              服务器访问日志
@@ -371,7 +372,15 @@ python validate.py
 
 # 端到端测试(需先启动服务器; 依赖 playwright + 本机 Chrome, 用 channel:'chrome')
 node tests/e2e.js
+
+# 视觉核验出图(会真的下单画图, 跑完自己还原存档)
+node tests/visual_check.js
 ```
+
+> **测试会动真实存档**：`e2e.js` / `visual_check.js` 都会真的下单、画图，所以开头备份
+> `data/journal.json` 与 `data/draw.json`、跑完写回。写回是**并集**不是覆盖 ——
+> 凡是创建时间早于本轮开跑的记录一律保留（`tests/archive.js`），
+> 你在测试跑着的时候自己做的交易不会被抹掉；异常退出也有兜底还原。
 
 ## 已知边界
 
@@ -395,6 +404,26 @@ node tests/e2e.js
 ## 更新记录
 
 > 倒序，最新在上。每一条都是当时真实做过、并用 `tests/e2e.js` 守住的改动。
+
+> **版本 v1.2.13**（2026-10-25）· 版本号同时记在 `VERSION` 文件与 git tag `v1.2.13` 上。
+>
+> 这一版只修「测试会吃掉用户账本」这一件事 —— v1.2.12 那一轮把它引爆了。
+>
+> - **还原从「覆盖」改成「并集」**（`tests/archive.js`）：e2e / 视觉自检都是
+>   「备份 → 清空 → 跑 → 还原」，而还原以前直接 `POST` 备份覆盖磁盘。于是
+>   ① 备份之后、测试跑着的时候，你在自己浏览器里做的交易，会在还原时被整条抹掉；
+>   ② 任何一次中途崩溃，账本干脆留成空文件。
+>   现在：交易/挂单的 id 就是 `Date.now().toString(36)`（`T-` / `O-` 前缀），能直接
+>   解出创建毫秒 —— 凡是**创建时间早于本轮开跑**的记录一律保留，只把本轮测试自己
+>   造的那些去掉。绘图存档（`{byTf}`，图元 id 是自增序号，解不出时间）仍是整桶覆盖。
+> - **异常兜底**：`catch` / `uncaughtException` / `unhandledRejection` 三个出口都先
+>   还原再退出（`visual_check.js` 用 `try/finally`）。
+> - **`tools/read_chrome_ls.py`**：这次用来救数据的一次性工具，留下来备用 ——
+>   从 Chrome 的 `Local Storage/leveldb/*.ldb` 里把某个键的值抠出来。Chromium 的
+>   localStorage 值可能是 UTF-16 且整块被 Snappy 压缩过（直接 `grep` 只能看到碎片），
+>   所以脚本里自己实现了 Snappy 解压 + leveldb block 解析，**只读，不改任何文件**。
+>   用法：`python tools/read_chrome_ls.py "<路径>/377016.ldb" es_replay_journal`。
+> - 实测：修完连跑 e2e（253/253）与视觉自检各一次，账本前后都是 **25 笔 / 11 条**。
 
 > **版本 v1.2.12**（2026-10-25）· 版本号同时记在 `VERSION` 文件与 git tag `v1.2.12` 上。
 >

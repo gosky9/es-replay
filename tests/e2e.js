@@ -4,6 +4,7 @@
  * 前置: server.py 已在 127.0.0.1:8899 运行
  */
 const { chromium } = require('playwright');
+const { mergeJournal } = require('./archive');
 
 const BASE = 'http://127.0.0.1:8899';
 const SHOT = __dirname + '/../_shot_main.png';
@@ -23,21 +24,38 @@ const waitLoaded = page => page.waitForFunction(
  * 用户真实的练习账本就被留成空文件了 —— 2026-10-25 真的发生了一次 (不是本文件,
  * 是一次性探针脚本; 但本文件结构一样危险)。
  * 所以: 备份存到模块级 BAK, 异常出口 (catch / uncaughtException / beforeExit)
- * 一律先同步把两张存档写回去, 再退出。 */
+ * 一律先把两张存档写回去, 再退出。
+ *
+ * 第二层: 还原不能「直接覆盖」。用户在测试跑着的时候自己做的交易, 一覆盖就没了
+ * (2026-10-25 丢了 3 笔)。所以账本走 mergeJournal(): 备份 ∪ 「创建时间早于本轮开跑」
+ * 的记录, 见 tests/archive.js。 */
+const RUN_START = Date.now();
 let BAK = null;
+
+async function postJSON(path, body) {
+  try {
+    const r = await fetch(BASE + path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return r.ok;
+  } catch (e) { return false; }
+}
+
+/** 把账本按「并集」还原: 只多不少 */
+async function restoreJournal(bak) {
+  let cur = null;
+  try {
+    const r = await fetch(BASE + '/api/journal', { cache: 'no-store' });
+    if (r.ok) cur = await r.json();
+  } catch (e) { cur = null; }
+  return postJSON('/api/journal', mergeJournal(bak, cur, RUN_START));
+}
+
 async function emergencyRestore(tag) {
   if (!BAK) return;
-  const post = async (path, body) => {
-    try {
-      const r = await fetch(BASE + path, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      return r.ok;
-    } catch (e) { return false; }
-  };
-  const a = await post('/api/journal', BAK.journal);
-  const b = await post('/api/draw', BAK.draw);
+  const a = await restoreJournal(BAK.journal);
+  const b = await postJSON('/api/draw', BAK.draw);
   console.error(`[兜底还原] ${tag || ''} journal=${a ? 'ok' : 'FAIL'} draw=${b ? 'ok' : 'FAIL'}`);
 }
 process.on('uncaughtException', e => {
@@ -2848,10 +2866,9 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   await page.waitForTimeout(500);
   await page.evaluate(() => document.getElementById('toast').classList.remove('show'));
   await page.screenshot({ path: SHOT });
-  await page.evaluate(async (bk) => {
-    await fetch('/api/journal', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(bk) });
-  }, journalBackup);
+  /* 账本还原走并集 (见 tests/archive.js): 只把本轮测试造的那些去掉,
+     用户在这期间自己做的交易一条都不能少 */
+  await restoreJournal(journalBackup);
   check('截图保存', true, SHOT);
 
   /* 16. 持仓的会话归属 (v1.1.1 回归)
