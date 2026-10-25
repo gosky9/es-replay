@@ -3012,6 +3012,56 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         restartOk && afterRestart.n === afterClose.n1 && afterRestart.n > 0,
         JSON.stringify(afterRestart));
 
+  /* ================= v1.2.11 RTH 收盘前切时段不能"跳日" =================
+     用户 2026-10-25:「在 20240122 RTH 15:55 复盘, 点 ETH 突然干到 23 号 9:35」。
+     根因: barEndAt 拿「下一根的起点」当结束时刻 —— RTH 当天最后一根 5m 是 15:55,
+     它后面一根直接是次日 09:30(隔 1055 分钟), 于是 playhead 被设成次日开盘,
+     switchSession 再拿 playhead-1 当锚点, 一切时段就整个飞到第二天早上。 */
+  await page.click('#sessionSeg button[data-session="rth"]');
+  await waitLoaded(page);
+  await page.waitForTimeout(400);
+  await page.click('#tfGroup button[data-tf="5m"]');
+  await waitLoaded(page);
+  await page.waitForTimeout(400);
+  await page.fill('#gotoInput', '2024-01-22 15:55');
+  await page.evaluate(() => App.gotoTime());
+  await page.waitForTimeout(900);
+
+  const rthClose = await page.evaluate(() => {
+    const i = App.engine.idx, b = App.bars[i], nb = App.bars[i + 1];
+    const end = App.barEndAt(i);
+    return {
+      cur: etTimeStr(b.epoch, b.off),
+      next: nb ? etTimeStr(nb.epoch, nb.off) : null,
+      gapMin: nb ? Math.round((nb.epoch - b.epoch) / 60) : null,
+      end: end ? etTimeStr(end, b.off) : null,
+      playhead: App.playhead ? etTimeStr(App.playhead, b.off) : null,
+    };
+  });
+  check('RTH 收盘那根的「结束时刻」是当天 16:00, 不是次日开盘',
+        rthClose.end === '2024-01-22 16:00 ET' && rthClose.playhead === '2024-01-22 16:00 ET',
+        JSON.stringify(rthClose));
+
+  await page.click('#sessionSeg button[data-session="eth"]');
+  await waitLoaded(page);
+  await page.waitForTimeout(1000);
+  const toEth = await page.evaluate(() => {
+    const b = App.engine.current;
+    return { session: App.session, cur: etTimeStr(b.epoch, b.off) };
+  });
+  check('15:55 切 ETH 停在原地 (不跳到次日早上)',
+        toEth.session === 'eth' && toEth.cur === '2024-01-22 15:55 ET', JSON.stringify(toEth));
+
+  await page.click('#sessionSeg button[data-session="rth"]');
+  await waitLoaded(page);
+  await page.waitForTimeout(900);
+  const backRth = await page.evaluate(() => {
+    const b = App.engine.current;
+    return { session: App.session, cur: etTimeStr(b.epoch, b.off) };
+  });
+  check('再从 ETH 切回 RTH 也还在 15:55 (来回都不漂)',
+        backRth.session === 'rth' && backRth.cur === '2024-01-22 15:55 ET', JSON.stringify(backRth));
+
   /* 把真实的绘图存档还回去, 别把测试画的线留给用户 */
   await page.evaluate(async bak => {
     try {

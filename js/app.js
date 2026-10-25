@@ -967,9 +967,18 @@ const App = {
   barEndAt(i) {
     const b = this.bars && this.bars[i];
     if (!b) return null;
+    const step = (TF_MINUTES[this.tf] || 1) * 60;
     const nb = this.bars[i + 1];
-    if (nb && nb.epoch > b.epoch) return nb.epoch;
-    return b.epoch + (TF_MINUTES[this.tf] || 1) * 60;
+    /* ⚠️ 不能无脑用「下一根的起点」—— v1.2.8 就是这么写的, 2026-10-25 用户踩到了:
+       RTH 当天最后一根 5m 是 15:55, 它后面一根直接是**次日 09:30**(隔 1055 分钟),
+       于是 playhead 被设成次日开盘, 再点 ETH 就整个飞到第二天早上。
+       规则: 只有「下一根紧挨着」(≤ 1.6 个周期) 才拿它当结束, 否则按周期长度兜底。
+         · 日内正常间隔 = 1 个周期 → 用下一根 (跨不跨时段都一样准)
+         · RTH 收盘那根 → 退回 +周期 = 16:00 ✓
+         · 日线工作日正好 1 个周期 → 用下一根; 周五跨 3 天的会退回 +1 天
+         · 月线 28~31 天都在 1.6 倍(48 天)以内 → 仍然用下一根 */
+    if (nb && nb.epoch > b.epoch && (nb.epoch - b.epoch) <= step * 1.6) return nb.epoch;
+    return b.epoch + step;
   },
 
   /** 用 1 分钟数据算 [from, to) 的 OHLCV —— 专门用来现算"当前这根未走完的 K 线" */
