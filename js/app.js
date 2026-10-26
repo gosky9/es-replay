@@ -8,6 +8,12 @@ const App = {
   targetEpoch: null,
   CONTEXT_BARS: 400,
   FORWARD_BARS: 3000,
+  HISTORY_CHUNK: 400,        // 往左拖到头时, 每次往前补多少根
+  HISTORY_TRIGGER: 30,       // 视窗左边界离数据起点不足这么多根就补
+  MAX_BARS: 60000,           // 补到这个总量就停手 (5m 约 4 年), 防止一路拖到 20 年前把内存撑爆
+  _loadingMore: false,       // 正在补历史 (兼作重入锁)
+  _noMoreHistory: false,     // 已经到数据最左边了, 别再试
+  _edgeWatching: false,      // 视窗监听只挂一次
   orderDir: 'buy',
   orderType: 'market',
   theme: 'light',
@@ -850,46 +856,18 @@ const App = {
     this.loading(true, '加载数据…');
     // 新开一场: 已知时刻作废, 下面按当前这根重新起算。切周期/切时段走 else 分支, 沿用原值
     if (fresh) this.playhead = null;
+    this._noMoreHistory = false;        // 换了周期/时段, 数据边界跟着变, 重新允许补历史
+    this._suppressEdge = true;          // 这一段里 setData 会触发视窗回调, 别让它插进来补历史
     try {
       const w = await DataLoader.loadWindow(this.session, this.tf, this.targetEpoch,
                                             this.CONTEXT_BARS, this.FORWARD_BARS);
       if (!w || w.data.count === 0) {
+        this._suppressEdge = false;
         this.toast('该时段无数据, 请换一个', true); this.loading(false);
         if (fresh) document.getElementById('startModal').style.display = '';
         return;
       }
-      const d = w.data;
-      const n = w.indices.length;
-      const isDay = (this.tf === '1d' || this.tf === '3d' || this.tf === '1w' || this.tf === '1M');
-      const bars = new Array(n);
-      const k = 2 / 21;                     // EMA20 因果计算
-      const tfMin = TF_MINUTES[this.tf] || 1;
-      let prev = null;
-      let prevKey = null, dayNo = 0;        // Bar Count: 按当日重置
-      for (let i = 0; i < n; i++) {
-        const j = w.indices[i];
-        const ep = d.time[j], off = d.off[j];
-        const c = d.close[j];
-        if (prev === null) prev = c;
-        else prev = c * k + prev * (1 - k);
-        let dkey, dno;
-        if (isDay) { dkey = 'D' + i; dno = i + 1; }   // 日/周线: 每根独立, 用顺序号
-        else {
-          dkey = dayKeyOf(ep, off, this.session);
-          if (dkey !== prevKey) {
-            const firstOfWindow = prevKey === null;
-            prevKey = dkey;
-            // 窗口首根落在日内中间时, 用"距开盘的时间"估算它是当日第几根
-            dayNo = firstOfWindow ? barNoInDay(ep, off, this.session, tfMin) : 1;
-          } else dayNo++;
-          dno = dayNo;
-        }
-        bars[i] = {
-          t: isDay ? etDateStr(ep, off) : chartTime(ep, off),
-          o: d.open[j], h: d.high[j], l: d.low[j], c, v: d.volume[j],
-          ema: prev, epoch: ep, off, dayNo: dno, dayKey: dkey,
-        };
-      }
+      const bars = this.makeBars(w);
       this.bars = bars;
 
       /* 已知时刻(playhead):
@@ -957,9 +935,143 @@ const App = {
       this.toast(`开始复盘: ${etTimeStr(cur.epoch, cur.off)} (${TF_LABEL[this.tf]} / ${this.session.toUpperCase()})`);
     } catch (e) {
       console.error(e);
+      this._suppressEdge = false;
       this.toast('加载失败: ' + e.message, true);
     }
+    this._suppressEdge = false;
+    this.watchLeftEdge();          // 拖到左边界就自动往前补历史 (只挂一次)
     this.loading(false);
+  },
+
+  /** 把 loadWindow 的结果转成 bar 数组 (loadAndBuild 与 loadMoreHistory 共用)
+   *
+   *  EMA 这里按「本段序列」递推, 只是个初值; 往前面插历史后必须调 recalcEma()
+   *  整体重算 —— EMA 是沿 close 递推的, 前面多了一段, 整条都该跟着变。
+   */
+  makeBars(w) {
+    const d = w.data;
+    const n = w.indices.length;
+    const isDay = (this.tf === '1d' || this.tf === '3d' || this.tf === '1w' || this.tf === '1M');
+    const bars = new Array(n);
+    const k = 2 / 21;                     // EMA20 因果计算
+    const tfMin = TF_MINUTES[this.tf] || 1;
+    let prev = null;
+    let prevKey = null, dayNo = 0;        // Bar Count: 按当日重置
+    for (let i = 0; i < n; i++) {
+      const j = w.indices[i];
+      const ep = d.time[j], off = d.off[j];
+      const c = d.close[j];
+      if (prev === null) prev = c;
+      else prev = c * k + prev * (1 - k);
+      let dkey, dno;
+      if (isDay) { dkey = 'D' + i; dno = i + 1; }   // 日/周线: 每根独立, 用顺序号
+      else {
+        dkey = dayKeyOf(ep, off, this.session);
+        if (dkey !== prevKey) {
+          const firstOfWindow = prevKey === null;
+          prevKey = dkey;
+          // 窗口首根落在日内中间时, 用"距开盘的时间"估算它是当日第几根
+          dayNo = firstOfWindow ? barNoInDay(ep, off, this.session, tfMin) : 1;
+        } else dayNo++;
+        dno = dayNo;
+      }
+      bars[i] = {
+        t: isDay ? etDateStr(ep, off) : chartTime(ep, off),
+        o: d.open[j], h: d.high[j], l: d.low[j], c, v: d.volume[j],
+        ema: prev, epoch: ep, off, dayNo: dno, dayKey: dkey,
+      };
+    }
+    return bars;
+  },
+
+  /** 全量重算 EMA20。往前面插了历史之后, 原来的递推起点不再是数据起点, 只能从头来。 */
+  recalcEma() {
+    const k = 2 / 21;
+    let prev = null;
+    for (const b of this.bars) {
+      prev = (prev === null) ? b.c : b.c * k + prev * (1 - k);
+      b.ema = prev;
+    }
+  },
+
+  /** 拖到左边界时往前补一段历史 (v1.2.18)
+   *
+   *  为什么需要: 每次开始复盘只加载 targetEpoch 之前 400 根 (CONTEXT_BARS),
+   *  用户往左拖超过这段就只剩一片空白 —— 数据其实有 20 年, 只是没载进来。
+   *  注意数据是按年的整块文件, 一次会读进一整年, 但这里只取需要的最后 CHUNK 根,
+   *  不让 bars 无谓地膨胀。
+   */
+  async loadMoreHistory() {
+    if (this._loadingMore || this._noMoreHistory || this._suppressEdge) return;
+    if (!this.engine || !this.bars.length) return;
+    if (this.bars.length >= this.MAX_BARS) { this._noMoreHistory = true; return; }
+    const first = this.bars[0];
+    if (!first) return;
+
+    this._loadingMore = true;
+    try {
+      /* 要「first 之前」的那一段: 目标点取 first.epoch - 1, forwardBars = 0 */
+      const w = await DataLoader.loadWindow(this.session, this.tf, first.epoch - 1,
+                                            this.HISTORY_CHUNK, 0);
+      if (!w || !w.indices.length) { this._noMoreHistory = true; return; }
+      const got = this.makeBars(w);
+      /* 窗口是闭区间, 可能把 first 自己带回来 —— 只留严格更早的 */
+      const cut = got.findIndex(b => b.epoch >= first.epoch);
+      const fresh = cut < 0 ? got : got.slice(0, cut);
+      if (!fresh.length) { this._noMoreHistory = true; return; }
+
+      const n = fresh.length;
+      /* 换成新数组: unshift 几千个参数会爆栈, concat 更稳。
+         engine.bars 和 App.bars 必须指向同一个数组实例, 所以这里手动同步。 */
+      this.bars = fresh.concat(this.bars);
+      this.engine.bars = this.bars;
+      this.engine.idx += n;                       // 当前这根往后挪了 n 格
+      if (this._tickIdx != null) this._tickIdx += n;
+      if (this._live) this._live.idx += n;
+
+      this.recalcEma();
+      /* 被现算过的那根半根 K 线, EMA 依赖前一根, 前面数据变了要跟着重算 */
+      if (this._live) {
+        const i = this._live.idx;
+        const b = this.bars[i];
+        if (b) {
+          const pe = i > 0 ? this.bars[i - 1].ema : null;
+          const k = 2 / 21;
+          b.ema = pe == null ? b.c : b.c * k + pe * (1 - k);
+        }
+      }
+      /* 日线以上 dayKey/dayNo 是「窗口内第几根」, 前面多了一段就得整体重排 */
+      if (this.tf === '1d' || this.tf === '3d' || this.tf === '1w' || this.tf === '1M') {
+        for (let i = 0; i < this.bars.length; i++) {
+          this.bars[i].dayKey = 'D' + i;
+          this.bars[i].dayNo = i + 1;
+        }
+      }
+
+      ChartMgr.setData(this.visibleBars(), { preserve: true, shiftLogical: n });
+      this.renderReplayBar();
+    } catch (e) {
+      console.error('[loadMoreHistory]', e);
+      this._noMoreHistory = true;               // 出过错就别反复重试
+    } finally {
+      this._loadingMore = false;
+    }
+  },
+
+  /** 监听视窗: 左边界快到头了就往前面补
+   *  只挂一次, 因为 timeScale 的生命周期比会话长。 */
+  watchLeftEdge() {
+    if (this._edgeWatching) return;
+    if (typeof ChartMgr === 'undefined' || !ChartMgr.chart) return;
+    this._edgeWatching = true;
+    ChartMgr.chart.timeScale().subscribeVisibleLogicalRangeChange(r => {
+      if (!r) return;
+      if (this._suppressEdge || this._loadingMore || this._noMoreHistory) return;
+      if (!this.engine || !this.bars.length) return;
+      if (this.bars.length >= this.MAX_BARS) return;
+      if (r.from > this.HISTORY_TRIGGER) return;
+      this.loadMoreHistory();
+    });
   },
 
   visibleBars() { return this.engine ? this.bars.slice(0, this.engine.idx + 1) : []; },

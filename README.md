@@ -3,7 +3,7 @@
 基于 CME E-mini S&P 500 (ES) 1 分钟历史数据的**本地复盘练习工具**：随机/自选一段行情，
 像 TradingView 的 Bar Replay 一样逐根播放，同时支持下单、持仓盈亏、交易记录统计。
 
-> 当前版本 **v1.2.17**（2026-10-26）。逐版改动记录见文末 **[更新记录](#更新记录)**，或 `git tag` / 根目录 `VERSION` 文件。
+> 当前版本 **v1.2.18**（2026-10-26）。逐版改动记录见文末 **[更新记录](#更新记录)**，或 `git tag` / 根目录 `VERSION` 文件。
 
 ## 快速开始
 
@@ -356,7 +356,7 @@ es-replay/
 │   └── journal.json        交易账本(自动生成, 不入库)
 ├── preprocess.py           数据预处理(主力拼接→复权→10 周期聚合)
 ├── validate.py             数据校验脚本
-├── tests/e2e.js            Playwright 端到端测试(258 项)
+├── tests/e2e.js            Playwright 端到端测试(261 项)
 ├── tests/archive.js        测试存档还原: 账本按「并集」写回, 不覆盖用户的记录
 ├── tests/visual_check.js   视觉核验截图(黑白盘面/绘图/突破单)
 ├── reference/             用户给的参考截图 + 1:1 对照清单
@@ -404,6 +404,33 @@ node tests/visual_check.js
 ## 更新记录
 
 > 倒序，最新在上。每一条都是当时真实做过、并用 `tests/e2e.js` 守住的改动。
+
+> **版本 v1.2.18**（2026-10-26）· 版本号同时记在 `VERSION` 文件与 git tag `v1.2.18` 上。
+>
+> 用户问「为啥我往前拖是空白」。查出来不是 bug，是**加载窗口的边界**：每次开复盘只加载
+> `targetEpoch` 之前 400 根（`CONTEXT_BARS`），5 分钟周期下约 5 个交易日，再往前就没有 K 线了。
+> 数据本身有 20 年（2007-09 ~ 2026-07），只是没载进来。左边那些飘着的短线/箭头/文字是
+> 用户自己的绘图——绘图层按逻辑坐标外推（v1.2.9「绘图在全图有效」），K 线没了它还在。
+>
+> 用户选择「拖到边界自动往前加载」。实现：
+>
+> - `App.loadMoreHistory()`：往左拖到头时，以「当前窗口首根之前」为目标再取 `HISTORY_CHUNK`
+>   (400) 根，插到 `bars` 最前面。数据文件是按年的整块，但只取需要的最后 400 根，
+>   不让数组无谓膨胀。
+> - `App.watchLeftEdge()`：订阅 `subscribeVisibleLogicalRangeChange`，`range.from <= 30`
+>   时补一轮。只挂一次；`_suppressEdge` 挡住 `loadAndBuild` 期间的回调，`_loadingMore` 兼作重入锁。
+> - **画面不跳**：`ChartMgr.setData` 新增 `shiftLogical`，插了 n 根就把视窗整体右移 n 格，
+>   用户看到的还是同一批 K 线。实测锚点 x `-72.1 → -72.1`，像素级不动。
+> - **回放位置不漂**：`engine.idx`、`_tickIdx`、`_live.idx` 同步加 n；`engine.bars` 与
+>   `App.bars` 指向同一个数组实例。
+> - **EMA 整体重算**（`recalcEma`）：EMA 是沿 close 递推的，前面多了一段，原来的递推起点
+>   就不对了，只能从头来。被现算过的那根「半根 K 线」也跟着重算。
+> - **日线以上重排 Bar Count**：`dayKey/dayNo` 是窗口内序号，前面插了数据就得整体重排；
+>   日内周期用的是绝对时间算的，不受影响。
+> - **到底会停**：`_noMoreHistory` 一次置位就不再重试；`MAX_BARS = 60000` 兜底，
+>   防止一路拖到 20 年前把内存撑爆。实测拖到 `2007-09-20`（数据最左端）后不再增长。
+> - 参数都在 `js/app.js` 顶部：`HISTORY_CHUNK` / `HISTORY_TRIGGER` / `MAX_BARS`。
+> - e2e 新增 3 条：自动补历史、回放位置不漂、画面锚定。258 → **261**。
 
 > **版本 v1.2.17**（2026-10-26）· 版本号同时记在 `VERSION` 文件与 git tag `v1.2.17` 上。
 >

@@ -3349,6 +3349,72 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         heal.gone === true && heal.after === heal.before - 1,
         `${heal.before} → ${heal.after} 笔, 已剔除=${heal.gone}`);
 
+  /* 往左拖到头自动补历史 (v1.2.18)
+     原来只加载 targetEpoch 之前 400 根 (CONTEXT_BARS), 用户往左拖超过这段就一片空白 ——
+     数据有 20 年, 只是没载进来。现在拖到左边界会自动往前补 400 根。 */
+  const histMore = await page.evaluate(async () => {
+    const n0 = App.bars.length;
+    const idx0 = App.engine.idx;
+    const cur0 = App.engine.current.epoch;
+    /* 拿窗口第一根当"画面锚点": 补历史后它应当在同一个屏幕位置 */
+    const k = ChartMgr._lastData[0];
+    const x0 = ChartMgr.chart.timeScale().timeToCoordinate(k.t);
+    const et0 = k.t;
+
+    ChartMgr.chart.timeScale().setVisibleLogicalRange({ from: 5, to: 80 });
+    await new Promise(r => setTimeout(r, 1800));
+
+    const ld = ChartMgr._lastData;
+    const same = ld.find(b => b.t === et0);
+    return {
+      n0, n1: App.bars.length,
+      idx0, idx1: App.engine.idx,
+      cur0, cur1: App.engine.current.epoch,
+      anchorIdx1: same ? ld.indexOf(same) : -1,
+      x0, x1: same ? ChartMgr.chart.timeScale().timeToCoordinate(same.t) : null,
+      first0: k.epoch,
+      first1: App.bars[0].epoch,
+    };
+  });
+  check('往左拖到头会自动补历史 (根数增加、首根更早)',
+        histMore.n1 > histMore.n0 && histMore.first1 < histMore.first0,
+        `${histMore.n0} → ${histMore.n1} 根`);
+  check('补历史后回放位置不漂 (idx 同步偏移, 当前这根不变)',
+        histMore.cur1 === histMore.cur0 && histMore.idx1 === histMore.idx0 + (histMore.n1 - histMore.n0),
+        `idx ${histMore.idx0} → ${histMore.idx1}, 当前 ${histMore.cur0} → ${histMore.cur1}`);
+  /* 单独验「画面锚定」: 必须在同一个视窗下量前后坐标。
+     所以先把自动触发关掉, 手动挪视窗 → 量 → 手动补 → 再量。 */
+  const histAnchor = await page.evaluate(async () => {
+    const trig = App.HISTORY_TRIGGER;
+    App.HISTORY_TRIGGER = -9999;                     // 暂时关掉自动触发
+    try {
+      ChartMgr.chart.timeScale().setVisibleLogicalRange({ from: 5, to: 80 });
+      await new Promise(r => setTimeout(r, 300));
+      const k = ChartMgr._lastData[0];               // 当前画面左边那根
+      const et0 = k.t;
+      const x0 = ChartMgr.chart.timeScale().timeToCoordinate(et0);
+      const n0 = App.bars.length;
+
+      App.HISTORY_TRIGGER = trig;
+      await App.loadMoreHistory();
+      await new Promise(r => setTimeout(r, 300));
+
+      const ld = ChartMgr._lastData;
+      const i1 = ld.findIndex(b => b.t === et0);
+      return {
+        n0, n1: App.bars.length, i1,
+        x0, x1: i1 >= 0 ? ChartMgr.chart.timeScale().timeToCoordinate(ld[i1].t) : null,
+      };
+    } finally {
+      App.HISTORY_TRIGGER = trig;
+    }
+  });
+  check('补历史后画面锚定: 原来那根 K 线的屏幕位置不动',
+        histAnchor.n1 > histAnchor.n0 && histAnchor.i1 >= 0 &&
+        histAnchor.x0 != null && histAnchor.x1 != null &&
+        Math.abs(histAnchor.x1 - histAnchor.x0) < 1,
+        `锚点从第 0 根移到第 ${histAnchor.i1} 根, x ${histAnchor.x0 && histAnchor.x0.toFixed(1)} → ${histAnchor.x1 && histAnchor.x1.toFixed(1)}`);
+
   /* 把真实的绘图存档还回去, 别把测试画的线留给用户 */
   await page.evaluate(async bak => {
     try {

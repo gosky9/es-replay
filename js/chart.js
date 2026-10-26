@@ -462,10 +462,14 @@ const ChartMgr = {
       // 跟随态判断: 视窗右端贴着最新一根且新 bar 会跑出视窗 => 整体右移一格
       // 否则严格恢复用户原来的视窗(不打断拖动/缩放)
       const n = bars.length;
-      const follow = opts.followLast && prev.to < n && prev.to >= n - 3;
+      /* shiftLogical: 这次是「往前面插了 shift 根历史」, 所有逻辑索引整体后移。
+         用户视窗要跟着平移同样的格数, 否则画面会突然跳到别的位置 (v1.2.18)。
+         插历史不可能是「跟随末根」, 所以 followLast 在这种场景下不适用。 */
+      const shift = opts.shiftLogical || 0;
+      const follow = !shift && opts.followLast && prev.to < n && prev.to >= n - 3;
       ts.setVisibleLogicalRange(follow
         ? { from: prev.from + 1, to: prev.to + 1 }
-        : prev);
+        : { from: prev.from + shift, to: prev.to + shift });
     }
     if (typeof Draw !== 'undefined' && Draw.render) Draw.render();     // 绘图层的 Bar Count 序号需跟随数据刷新
   },
