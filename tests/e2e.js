@@ -3415,6 +3415,55 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         Math.abs(histAnchor.x1 - histAnchor.x0) < 1,
         `锚点从第 0 根移到第 ${histAnchor.i1} 根, x ${histAnchor.x0 && histAnchor.x0.toFixed(1)} → ${histAnchor.x1 && histAnchor.x1.toFixed(1)}`);
 
+  /* 图元滚出视野后不能在屏幕边缘粘标签 (v1.2.19)
+     斐波那契原来会把级别标签「放不下就贴左边缘」, 于是几百根之前画的那条早就滚出屏幕,
+     四行 `级别 (价格)` 还死死粘在最左边 (用户 2026-10-26 报)。 */
+  const fibOut = await page.evaluate(async () => {
+    /* 画布上还有成交箭头/持仓线/时间轴下划线这些「非图元」内容, 量像素前先屏蔽,
+       否则 mov 走的图元已经没了, 残留的那些还会被算进来 */
+    const oMark = Draw.drawTradeMarkers, oLines = Draw.drawOrderLines, oRep = Draw.drawReportMarks;
+    Draw.drawTradeMarkers = () => { };
+    Draw.drawOrderLines = () => { };
+    Draw.drawReportMarks = () => { };
+    try {
+      Draw.items = [];
+      Draw.render();
+      const ld = ChartMgr._lastData;
+      const r = ChartMgr.visibleRange();
+      const i0 = Math.max(0, Math.round(r.from) + 10);
+      const i1 = Math.max(0, Math.round(r.from) + 40);
+      const b0 = ld[i0], b1 = ld[i1];
+      if (!b0 || !b1) return { err: '取不到 bar' };
+
+      Draw.addItem({ type: 'fib', a: { t: b0.t, p: b0.h }, b: { t: b1.t, p: b1.l }, levels: Draw.FIB.slice() });
+      Draw.render();
+      await new Promise(res => setTimeout(res, 150));
+
+      const cv = Draw.canvas, c2 = cv.getContext('2d');
+      const ink = () => {
+        const d = c2.getImageData(0, 0, cv.width, cv.height).data;
+        let n = 0;
+        for (let i = 3; i < d.length; i += 4) if (d[i] > 12) n++;
+        return n;
+      };
+      const inView = ink();
+      const ix = Draw.xOf(b0.t);
+
+      /* 视窗整体右移 400 格 —— 图元跑到屏幕左边之外 */
+      ChartMgr.chart.timeScale().setVisibleLogicalRange({ from: r.from + 400, to: r.to + 400 });
+      await new Promise(res => setTimeout(res, 400));
+      return { inView, outView: ink(), ix, ox: Draw.xOf(b0.t) };
+    } finally {
+      Draw.drawTradeMarkers = oMark;
+      Draw.drawOrderLines = oLines;
+      Draw.drawReportMarks = oRep;
+      Draw.render();
+    }
+  });
+  check('斐波那契滚出视野后整条不画 (不再把级别标签粘在屏幕边缘)',
+        !fibOut.err && fibOut.inView > 100 && fibOut.outView === 0,
+        JSON.stringify(fibOut));
+
   /* 把真实的绘图存档还回去, 别把测试画的线留给用户 */
   await page.evaluate(async bak => {
     try {

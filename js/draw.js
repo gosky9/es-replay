@@ -1578,6 +1578,11 @@ const Draw = {
       // 照 reference/06 截图: 无填充; 深灰水平线 + 左侧 `级别 (价格)` 灰字 + 两端空心圆手柄(仅绘制中)
       if (ax == null || ay == null || bx == null || by == null) { ctx.restore(); return; }
       const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx);
+      /* 整条都在视野水平外就整个不画。
+         原来没有这道闸: 下面的「左边放不下就贴左边缘」会把标签硬拽到 x=6,
+         于是几百根之前画的斐波那契早已滚出屏幕, 那几行 `级别 (价格)` 还粘在最左边
+         (2026-10-26 用户报「几百根K前画的斐波纳契还显示这个」)。 */
+      if (x1 < 0 || x0 > this.W) { ctx.restore(); return; }
       const pA = it.a.p, pB = it.b.p;                 // A 锚点=1 级, B 锚点=0 级
       const lvls = it.levels || this.FIB;
       const dark = ChartMgr.theme === 'dark';
@@ -1625,6 +1630,10 @@ const Draw = {
       //   每个级别一条灰实线, 横向从 x(B) 拉到 x(C), 标签右对齐贴在线左端外侧
       const cc = this._px(it.c);
       if (ax == null || ay == null || bx == null || by == null || !cc) { ctx.restore(); return; }
+      /* B、C 都在视野同一侧外 → 级别线和标签都看不见, 整个跳过。
+         和 fib 同一个毛病: 下面「左边实在放不下就贴左边缘」会把标签拽回 x 边缘,
+         结果图元滚出屏幕了, 级别文字还粘在最左边。 */
+      if (Math.max(bx, cc.x) < 0 || Math.min(bx, cc.x) > this.W) { ctx.restore(); return; }
       const dark = ChartMgr.theme === 'dark';
       const dashC = dark ? '#4a4e59' : '#cfcfcf';
       const lineC = dark ? '#b2b5be' : '#808080';
