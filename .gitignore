@@ -39,3 +39,6 @@ reference/_crop*.png
 
 # e2e 日志
 _*.log
+
+# 隔离测试服务的临时存档 (tests/sandbox_server.py 生成, 都是可再生的测试产物)
+tests/_sandbox/

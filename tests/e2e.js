@@ -2,11 +2,13 @@
  * 运行: NODE_PATH=C:/Users/gosky9/.workbuddy/binaries/node/workspace/node_modules \
  *       node tests/e2e.js
  * 前置: server.py 已在 127.0.0.1:8899 运行
+ *       建议跑在隔离服务上 (账本不碰真的): python tests/sandbox_server.py 8900
+ *       ES_BASE=http://127.0.0.1:8900 node tests/e2e.js
  */
 const { chromium } = require('playwright');
 const { mergeJournal } = require('./archive');
 
-const BASE = 'http://127.0.0.1:8899';
+const BASE = process.env.ES_BASE || 'http://127.0.0.1:8899';
 const SHOT = __dirname + '/../_shot_main.png';
 const SHOT_DARK = __dirname + '/../_shot_dark.png';
 const results = [];
@@ -1486,8 +1488,7 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         && Math.abs(logic.shortBracket[1] - 100.75) < 1e-9 && Math.abs(logic.shortBracket[0] - 98.5) < 1e-9,
         '多 TP/SL ' + JSON.stringify(logic.longBracket) + ' / 空 ' + JSON.stringify(logic.shortBracket));
   check('入场当根不判止盈止损', logic.entrySkip.length === 0 && logic.afterSkipPos === 1,
-        JSON.stringify(logic.entrySkip) + ' pos=' + logic.afterSkipPos);
-  check('下一根就扫到 2R → 止盈改挂入场K线另一侧, 不平仓',
+        JSON.stringify(logic.entrySkip) + ' pos=' + logic.afterSkipPos);  check('下一根就扫到 2R → 止盈改挂入场K线另一侧, 不平仓',
         logic.extend.ev.join() === 'tp_extend:' && Math.abs(logic.extend.tp - 103) < 1e-9 && logic.extend.pos === 1,
         JSON.stringify(logic.extend));
   check('改挂之后摸到新止盈才平仓',
@@ -3463,6 +3464,104 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   check('斐波那契滚出视野后整条不画 (不再把级别标签粘在屏幕边缘)',
         !fibOut.err && fibOut.inView > 100 && fibOut.outView === 0,
         JSON.stringify(fibOut));
+
+  /* (a2) 入场当根的"剩余行情"也要判 (v1.2.20, 用户批准方案 A)
+     突破单/限价单是在一根 K 线之内成交的, 成交之后这跟剩下的行情照样会扫到止盈止损。
+     原来一刀切"入场当根不判", 于是 2026-10-27 用户那笔 5525.5 做空:
+     10:20 分钟内成交, 10:21/10:22 两根 1 分钟都到 5519.50(止盈 5521.75), 却被跳过。
+     这里不依赖真实行情, 直接把"成交后那一段"喂进 checkExits()。 */
+  const entrySubLogic = await page.evaluate(() => {
+    const mk = (o, h, l, c, epoch) => ({ o, h, l, c, epoch: epoch || 0, off: 0, t: 0 });
+    const clean = (xs) => xs.filter(e => e.type !== 'risk_locked').map(e => e.kind || e.type);
+    const R = {};
+
+    /* 空头突破单 100 成交(tp 97 / sl 101), 整根 o100.5 h101 l96.5:
+       整根判 → 先撞 sl 平在 101; 只判成交后那一段(h99 l96.5) → 撞 tp 平在 97。
+       两个结果完全不同, 足以证明"拿哪一段"是真的在起作用。 */
+    Trading.reset();
+    Trading.placeStop('sell', 1, 100, { tp: 97, sl: 101 });
+    const ev = Trading.checkBar(mk(100.5, 101, 96.5, 96.5), 0, 0);
+    R.filled = { pos: Trading.pos, avg: Trading.avg, ev: clean(ev) };
+    const ev2 = Trading.checkExits({ h: 99, l: 96.5 }, 0, 0, { isEntryBar: true });
+    R.sub = { ev: clean(ev2), pos: Trading.pos, realized: Trading.realized };
+
+    // 对照: 拿整根去判就变成止损
+    Trading.reset();
+    Trading.placeStop('sell', 1, 100, { tp: 97, sl: 101 });
+    Trading.checkBar(mk(100.5, 101, 96.5, 96.5), 0, 0);
+    const ev3 = Trading.checkExits({ h: 101, l: 96.5 }, 0, 0, { isEntryBar: true });
+    R.whole = { ev: clean(ev3), pos: Trading.pos, realized: Trading.realized };
+
+    Trading.reset();
+    return R;
+  });
+  check('突破单在当根之内成交, 但当根不判止盈止损(只有 fill 事件)',
+        entrySubLogic.filled.pos === -1 && entrySubLogic.filled.ev.join() === 'fill',
+        JSON.stringify(entrySubLogic.filled));
+  check('入场当根: 只判成交之后那一段 → 吃到止盈',
+        entrySubLogic.sub.ev.join() === 'tp' && entrySubLogic.sub.pos === 0
+        && Math.abs(entrySubLogic.sub.realized - 150) < 1e-6, JSON.stringify(entrySubLogic.sub));
+  check('同样的子段换成整根去判会误判成止损(证明子段必要)',
+        entrySubLogic.whole.ev.join() === 'sl' && Math.abs(entrySubLogic.whole.realized + 50) < 1e-6,
+        JSON.stringify(entrySubLogic.whole));
+
+  /* (a3) 真流程: 用真实行情走一遍 —— 2024-02-01 10:15 挂卖突破 5525.5,
+     10:20 那根内成交(1 分钟最低 5522.75 就穿到), 之后 10:21/10:22 到 5519.50 → 止盈 5521.75 */
+  await page.fill('#gotoInput', '2024-02-01 10:15');
+  await page.click('#gotoBtn');
+  await page.waitForTimeout(1500);
+  const realSub = await page.evaluate(async () => {
+    const i = App.engine.idx;
+    const b20 = App.bars[i + 1], b25 = App.bars[i + 2];
+    return {
+      b20: { h: b20.h, l: b20.l }, b25: { h: b25.h, l: b25.l },
+      s20: await App.entryBarSub(b20, App.barEndAt(i + 1), { kind: 'stop', side: 'sell', price: 5525.5 }),
+      b25stop: await App.entryBarSub(b25, App.barEndAt(i + 2), { kind: 'stop', side: 'buy', price: 5528.0 }),
+    };
+  });
+  check('1 分钟子段: 成交在第 1 分钟时等于整根',
+        realSub.s20 && realSub.s20.h === realSub.b20.h && realSub.s20.l === realSub.b20.l,
+        JSON.stringify(realSub.b20) + ' → ' + JSON.stringify(realSub.s20));
+  check('1 分钟子段: 排除成交之前的最低价(5521.75)',
+        realSub.b25stop && realSub.b25stop.l === 5526.75 && realSub.b25.l === 5521.75,
+        '整根 ' + JSON.stringify(realSub.b25) + ' → 子段 ' + JSON.stringify(realSub.b25stop));
+
+  const realFlow = await page.evaluate(async () => {
+    Trading.reset();
+    App.pendingSetup = 'double_top'; App.pendingCycle = 'range'; App.syncSetupUI();
+    App._doStopOrderAtPrice('sell', 5525.5);
+    const o = Trading.stops[Trading.stops.length - 1];
+    o.tp = 5521.75; o.sl = 5530; Trading.save();     // 对齐用户那笔
+    App.engine.step(1);                              // → 10:20, 突破单成交
+    await new Promise(r => setTimeout(r, 900));      // 等 1 分钟数据算完
+    const rec = (Journal.data.trades || [])
+      .filter(x => x.entryPrice === 5525.5 && x.entryEpoch === x.exitEpoch).slice(-1)[0] || null;
+    return {
+      time: document.getElementById('replayTime').textContent,
+      pos: Trading.pos,
+      flow: Trading.trades.slice(-3).map(x => `${x.type}@${x.price}`),
+      rec: rec ? { price: rec.exitPrice, reason: rec.exitReason, r: rec.r,
+                   same: rec.entryEpoch === rec.exitEpoch, gotInitTp: rec.gotInitTp } : null,
+    };
+  });
+  check('突破单成交当根内就吃到止盈并平仓',
+        realFlow.pos === 0 && realFlow.rec && realFlow.rec.price === 5521.75
+        && realFlow.rec.reason === 'tp' && realFlow.rec.same,
+        realFlow.time + ' ' + JSON.stringify(realFlow.flow) + ' ' + JSON.stringify(realFlow.rec));
+
+  // 市价单成交在收盘那一刻, 当根没有剩余行情 → 不能被自己那根的高低点误平
+  const mktEntry = await page.evaluate(async () => {
+    Trading.reset();
+    App.pendingSetup = 'h2l2'; App.pendingCycle = 'range'; App.syncSetupUI();
+    App.placeOrder('buy');
+    await new Promise(r => setTimeout(r, 500));
+    return { pos: Trading.pos, kind: Trading._entryTrigger && Trading._entryTrigger.kind };
+  });
+  check('市价单当根不会被误平', mktEntry.pos !== 0 && mktEntry.kind === 'market', JSON.stringify(mktEntry));
+  await page.evaluate(() => Trading.reset());
+
+  /* 这一段会真的往账本里记一笔 → 单独再还原一次, 别把测试单留在用户的账本里 */
+  await restoreJournal(journalBackup);
 
   /* 把真实的绘图存档还回去, 别把测试画的线留给用户 */
   await page.evaluate(async bak => {

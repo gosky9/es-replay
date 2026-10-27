@@ -910,7 +910,7 @@ const App = {
         else ChartMgr.setData(this.visibleBars(), { preserve: true, followLast: true });
         if (!backward) {
           if (Trading._pendingLimits) this.checkLimits(bar);
-          this.runTradeChecks(bar);          // 突破单触发 / 止盈止损
+          this.runTradeChecks(bar, idx);     // 突破单触发 / 止盈止损 / 入场当根剩余行情
         }
         this.renderReplayBar();
         this.renderTrading();
@@ -2145,7 +2145,8 @@ const App = {
     const cycle = adding ? (Trading._posCycle || null) : this.pendingCycle;
     if (this.orderType === 'market') {
       const r = Trading.fill(side, qty, cur.c, 'market', cur.epoch, cur.off,
-                   { bar: cur, prev: this.prevBars(Trading.SL_LOOKBACK), setupId, cycle });
+                   { bar: cur, prev: this.prevBars(Trading.SL_LOOKBACK), setupId, cycle,
+                     entryTrigger: { kind: 'market', side, price: cur.c } });
       this.toast(`${side === 'buy' ? '买入' : '卖出'} ${qty} 手 @ ${cur.c.toFixed(2)} · ` +
                  (adding ? '加仓' : (wasPos === 0 ? Setups.name(setupId) : '减仓')));
       if (wasPos === 0) this.consumeSetup();
@@ -2236,9 +2237,10 @@ const App = {
       if (o.side === 'buy' && bar.l <= o.price) filled = true;
       if (o.side === 'sell' && bar.h >= o.price) filled = true;
       if (filled) {
-        const r = Trading.fill(o.side, o.qty, o.price, 'limit', bar.epoch, bar.off,
-                     { bar, prev: this.prevBars(Trading.SL_LOOKBACK),
-                       setupId: o.setupId, cycle: o.cycle });
+      const r = Trading.fill(o.side, o.qty, o.price, 'limit', bar.epoch, bar.off,
+                   { bar, prev: this.prevBars(Trading.SL_LOOKBACK),
+                     setupId: o.setupId, cycle: o.cycle,
+                     entryTrigger: { kind: 'limit', side: o.side, price: o.price } });
         this.toast(`限价成交: ${o.side === 'buy' ? '买入' : '卖出'} ${o.qty} 手 @ ${o.price.toFixed(2)}`);
         this.addMarker(o.side, o.price, r.closed > 0);
       } else remain.push(o);
@@ -2249,10 +2251,18 @@ const App = {
   },
 
   /** 每根 K 线的交易事件: 突破单触发 + 止盈止损 */
-  runTradeChecks(bar) {
+  runTradeChecks(bar, idx) {
     // prev = 入场那根之前的 5 根, 用来算"前 5 根极值"止损 (Trading.SL_LOOKBACK)
     const evs = Trading.checkBar(bar, bar.epoch, bar.off, { prev: this.prevBars(Trading.SL_LOOKBACK) });
-    for (const ev of evs) {
+    this.applyTradeEvents(evs);
+    /* 这一根里刚成交的(突破单/限价单) → 成交之后还有一段行情要走, 补判它。
+       同步流程里只判了"整根", 入场当根按口径是跳过的, 所以要单独走一次 1 分钟。 */
+    const p = this.settleEntryBarSub(bar, idx);
+    if (p && p.catch) p.catch(e => console.error('[settleEntryBarSub]', e));
+  },
+
+  applyTradeEvents(evs) {
+    for (const ev of (evs || [])) {
       if (ev.type === 'fill') {
         this.toast(`突破${ev.side === 'buy' ? '买入' : '卖出'}成交 ${ev.qty} 手 @ ${ev.price.toFixed(2)}`);
         this.addMarker(ev.side, ev.price, ev.closed > 0);
@@ -2268,6 +2278,83 @@ const App = {
         this.addMarker(ev.side, ev.price, true);          // 止盈/止损必然是出场
       }
     }
+  },
+
+  /** 入场当根「成交那一分钟 → 当根收盘」那一段的止盈止损判定 (v1.2.20, 用户批准方案 A)
+   *
+   *  突破单 / 限价单是在一根 K 线**之内**成交的, 成交之后这跟剩下的行情照样会扫到止盈止损。
+   *  原口径"入场当根不判"把所有成交都当成了市价单(成交在收盘那一刻), 于是漏判 ——
+   *  2026-10-27 用户那笔 5525.5 做空: 10:20 那分钟内成交, 10:21/10:22 两根 1 分钟都到
+   *  5519.50, 止盈 5521.75 早就打到, 却一直挂着。
+   *
+   *  为什么必须用 1 分钟数据: 整根 K 线的最高/最低跟"成交之后"没关系 ——
+   *  突破买单是在价格上行穿过止损位时成交的, 那根的低点往往在成交**之前**,
+   *  拿整根判止损会凭空判出一个从没发生过的止损。所以只取成交那一分钟起的行情。
+   */
+  async settleEntryBarSub(bar, idx) {
+    if (!this.engine || !bar) return false;
+    if (Trading.pos === 0) return false;
+    if (Trading._entrySubDone) return false;
+    if (Trading._entryEpoch !== bar.epoch) return false;
+    const trig = Trading._entryTrigger;
+    Trading._entrySubDone = true;                 // 一根只判一次
+    if (!trig || trig.kind === 'market') return false;   // 市价单成交在收盘, 当根没剩行情
+
+    const end = this.barEndAt(idx);
+    if (end == null || !(end > bar.epoch)) return false;
+    const idx0 = this.engine.idx;
+    const sub = await this.entryBarSub(bar, end, trig);
+    if (!sub) return false;
+    /* 等数据这几十毫秒里用户可能已经推走了/平掉了 —— 那就别补这一刀,
+       交给下一根的正常判定 (它会拿整根判, 不会漏掉价格还停在止盈外的情况) */
+    if (this.engine.idx !== idx0 || Trading.pos === 0) return false;
+    if (Trading._entryEpoch !== bar.epoch) return false;
+
+    const evs = Trading.checkExits(sub, bar.epoch, bar.off, { isEntryBar: true });
+    if (!evs.length) return false;
+    this.applyTradeEvents(evs);
+    this.renderTrading();
+    this.refreshMarkers();
+    Draw.render();
+    return true;
+  },
+
+  /** 用 1 分钟数据取「成交那一分钟 → 当根收盘」的真实高低点
+   *
+   *  成交时刻只知道自己是在这根 5m/15m 里成交的, 不知道是第几分钟 ——
+   *  就取**第一个满足触发条件的 1 分钟**: 突破买单看 high 有没有碰到挂单价,
+   *  突破卖单看 low, 限价单反过来 (限价买是往下接, 限价卖是往上抛)。
+   *  从那一分钟起到当根收盘取 h/l —— 那才是成交之后真正走过的价格。 */
+  async entryBarSub(bar, end, trig) {
+    let d;
+    try {
+      d = await DataLoader.loadRange(this.session, '1m', bar.epoch, end - 1);
+    } catch (e) { return null; }
+    if (!d || !d.count) return null;
+
+    const p = trig.price;
+    const hit = (i) => {
+      const h = d.high[i], l = d.low[i];
+      if (trig.kind === 'limit') return trig.side === 'buy' ? l <= p : h >= p;
+      return trig.side === 'buy' ? h >= p : l <= p;      // 突破单
+    };
+    let i0 = -1;
+    for (let i = 0; i < d.count; i++) {
+      const t = d.time[i];
+      if (t < bar.epoch || t >= end) continue;
+      if (hit(i)) { i0 = i; break; }
+    }
+    if (i0 < 0) return null;                              // 1 分钟里找不到成交那一下 → 不判
+
+    let h = -Infinity, l = Infinity;
+    for (let i = i0; i < d.count; i++) {
+      const t = d.time[i];
+      if (t < bar.epoch || t >= end) continue;
+      if (d.high[i] > h) h = d.high[i];
+      if (d.low[i] < l) l = d.low[i];
+    }
+    if (!isFinite(h) || !isFinite(l)) return null;
+    return { h, l };
   },
 
   /* ---------- 右键菜单 (突破单 / 平仓 / 撤销) ---------- */

@@ -1,5 +1,7 @@
 /* 视觉核验截图: 黑白盘面 + 绘图工具 + 突破单/止盈止损线 (手动运行)
  * NODE_PATH=... node tests/visual_check.js
+ * 建议跑在隔离服务上 (两张存档都不碰真的):
+ *   python tests/sandbox_server.py 8900 ; ES_BASE=http://127.0.0.1:8900 node tests/visual_check.js
  *
  * ⚠️ 这个脚本会**真的**下单、画图 —— data/journal.json 与 data/draw.json 都会被改写。
  *    所以开头备份、结尾无条件还原 (放 finally 里, 中途抛错也不留脏数据)。
@@ -8,7 +10,7 @@
  */
 const { chromium } = require('playwright');
 const { mergeJournal } = require('./archive');
-const BASE = 'http://127.0.0.1:8899';
+const BASE = process.env.ES_BASE || 'http://127.0.0.1:8899';
 const OUT = p => __dirname + '/../' + p;
 const RUN_START = Date.now();
 

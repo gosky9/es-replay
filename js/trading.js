@@ -26,11 +26,20 @@ const Trading = {
        止盈 = 入场价 ± 2 × 止损距离 (2R)
        如果开仓后的第一根就把 2R 扫掉(说明 2R 太近), 改用「入场K线另一侧」继续,
        这一根不平仓 —— 见 checkBar 里的 _tpGuard 分支。
-     入场那根 K 线本身不判止盈止损。 */
+
+     入场当根怎么判 (2026-10-27 用户批准方案 A):
+       市价单成交在当根**收盘那一刻** → 当根没有剩余行情, 不判。
+       突破单 / 限价单是在一根 K 线**之内**成交的 → 成交之后这跟剩下的一段照样会扫到止盈止损,
+       由 App.settleEntryBarSub() 用 1 分钟数据算出 [成交那一分钟, 当根收盘) 的真实高低点,
+       再调 checkExits(src, …, {isEntryBar:true}) 只判这一段。
+       原来一刀切"入场当根不判", 结果 2026-10-27 用户那笔 5525.5 做空成交后
+       10:21/10:22 两根 1 分钟都到 5519.50(止盈 5521.75), 却被跳过了。 */
   SL_LOOKBACK: 5,
   TP_R: 2,
   entryBar: null,          // 入场那根 K 线的 {h, l}
-  _entryEpoch: null,       // 入场那根的时间, 用来跳过入场当根的判定
+  _entryEpoch: null,       // 入场那根的时间
+  _entryTrigger: null,     // 本笔是怎么成交的 {kind:'market'|'stop'|'limit', side, price}
+  _entrySubDone: false,    // 入场当根"成交后那一段"是否已经走过止盈止损判定
   _tpGuard: false,         // true = 还没度过"开仓后第一根"
 
   /* ---------- 本笔交易的风险档案 ---------- */
@@ -127,6 +136,7 @@ const Trading = {
     this.trades = []; this.pos = 0; this.avg = 0; this.realized = 0;
     this.stops = []; this.tp = null; this.sl = null;
     this.entryBar = null; this._entryEpoch = null; this._tpGuard = false;
+    this._entryTrigger = null; this._entrySubDone = false;
     this._entryPrice = null; this._entryTime = ''; this._entrySide = null;
     this._posSetupId = null; this._posCycle = null;
     this._addOns = 0; this._maxQty = 0;
@@ -267,6 +277,8 @@ const Trading = {
             bar, prev: ctx && ctx.prev,
             setupId: o.setupId, cycle: o.cycle,
             planTp: o.tp, planSl: o.sl, gapEntry: gap,
+            // 成交在当根之内 → 记下触发价, 好让 App 用 1 分钟数据还原"成交后那一段"
+            entryTrigger: { kind: 'stop', side: o.side, price: o.price },
           });
           // closed 带上: 持仓中挂的反向突破单是用来平仓的, 盘面箭头要画成灰 (出场)
           ev.push({ type: 'fill', side: o.side, price: px, qty: o.qty, closed: r.closed });
@@ -280,44 +292,63 @@ const Trading = {
       this.stops = remain;
     }
 
-    // 2) 止盈 / 止损 —— 入场当根不判
+    /* 2) 止盈 / 止损 —— 只判整根
+       入场当根**成交之后的那一段**不在这里判: 它需要 1 分钟数据(异步),
+       由 App.settleEntryBarSub() 算好后调 checkExits(), 见那个函数的注释。 */
     if (this.pos !== 0 && this._entryEpoch !== epoch) {
-      const qty = Math.abs(this.pos);
-      const long = this.pos > 0;
-      const closeSide = long ? 'sell' : 'buy';
-      const slHit = this.sl != null && (long ? bar.l <= this.sl : bar.h >= this.sl);
-      let tpHit = this.tp != null && (long ? bar.h >= this.tp : bar.l <= this.tp);
+      for (const e of this.checkExits(bar, epoch, off, { isEntryBar: false })) ev.push(e);
+    }
+    return ev;
+  },
 
-      // 开仓后的第一根就把 2R 扫掉 → 2R 太近, 止盈改用「入场K线另一侧」, 这一根不平仓
-      if (tpHit && this._tpGuard && this.entryBar) {
-        const alt = long ? this.entryBar.h : this.entryBar.l;
-        if (long ? alt > this.tp : alt < this.tp) {
-          this.tp = alt;
-          // 注意: 这里不置 _tpMoved —— 那是"用户手动拖过止盈"的标记, 自动改挂不算
-          tpHit = false;
-          ev.push({ type: 'tp_extend', price: alt });
-          this.save();
-        }
-      }
-      this._tpGuard = false;
+  /** 止盈 / 止损判定本体。
+   *
+   *  src 只提供 {h, l} —— 谁来当 src 决定了"拿哪一段行情来判":
+   *   · 平时 = 整根 K 线
+   *   · 入场当根 = App 用 1 分钟数据算出的「成交那一分钟 → 当根收盘」那一段
+   *     (整根的高低点不行: 成交之前的高/低跟这笔交易毫无关系, 会凭空判出止损)
+   *  opts.isEntryBar: 入场当根不做 _tpGuard(2R 太近的延长), 那道保护留给真正的"下一根",
+   *  口径与用户 2026-10-22 定的完全一致 —— 这里只是把漏掉的当根补上。
+   */
+  checkExits(src, epoch, off, opts) {
+    const ev = [];
+    if (this.pos === 0 || !src) return ev;
+    const isEntryBar = !!(opts && opts.isEntryBar);
+    const qty = Math.abs(this.pos);
+    const long = this.pos > 0;
+    const closeSide = long ? 'sell' : 'buy';
+    const slHit = this.sl != null && (long ? src.l <= this.sl : src.h >= this.sl);
+    let tpHit = this.tp != null && (long ? src.h >= this.tp : src.l <= this.tp);
 
-      if (slHit) {
-        const px = this.sl;
-        this.fill(closeSide, qty, px, 'stop_loss', epoch, off, { bar, exitKind: 'sl' });
-        ev.push({ type: 'exit', kind: 'sl', price: px, side: closeSide });
-      } else if (tpHit) {
-        const px = this.tp;
-        // 出场原因统一是 tp; 「是不是初始止盈」由 _settle 里比 initTp 判定
-        this.fill(closeSide, qty, px, 'take_profit', epoch, off, { bar, exitKind: 'tp' });
-        ev.push({ type: 'exit', kind: 'tp', price: px, side: closeSide });
+    // 开仓后的第一根就把 2R 扫掉 → 2R 太近, 止盈改用「入场K线另一侧」, 这一根不平仓
+    if (!isEntryBar && tpHit && this._tpGuard && this.entryBar) {
+      const alt = long ? this.entryBar.h : this.entryBar.l;
+      if (long ? alt > this.tp : alt < this.tp) {
+        this.tp = alt;
+        // 注意: 这里不置 _tpMoved —— 那是"用户手动拖过止盈"的标记, 自动改挂不算
+        tpHit = false;
+        ev.push({ type: 'tp_extend', price: alt });
+        this.save();
       }
+    }
+    if (!isEntryBar) this._tpGuard = false;
+
+    if (slHit) {
+      const px = this.sl;
+      this.fill(closeSide, qty, px, 'stop_loss', epoch, off, { bar: src, exitKind: 'sl' });
+      ev.push({ type: 'exit', kind: 'sl', price: px, side: closeSide });
+    } else if (tpHit) {
+      const px = this.tp;
+      // 出场原因统一是 tp; 「是不是初始止盈」由 _settle 里比 initTp 判定
+      this.fill(closeSide, qty, px, 'take_profit', epoch, off, { bar: src, exitKind: 'tp' });
+      ev.push({ type: 'exit', kind: 'tp', price: px, side: closeSide });
     }
     return ev;
   },
 
   /* ================= 成交 ================= */
   /** 开/平仓成交
-   *  ctx: {bar, prev, setupId, cycle, planTp, planSl, gapEntry, exitKind}
+   *  ctx: {bar, prev, setupId, cycle, planTp, planSl, gapEntry, exitKind, entryTrigger}
    *  返回 {pnl, closed, truncated} —— truncated>0 表示超量下单被截断 (反手已取消) */
   fill(side, qty, price, type, epoch, off, ctx) {
     ctx = ctx || {};
@@ -370,6 +401,10 @@ const Trading = {
       this._entryPrice = price;
       this._entryTime = etTimeStr(epoch, off);
       this._entrySide = this.pos > 0 ? 'long' : 'short';
+      /* 成交方式: 突破单/限价单是"当根之内"成交的, App 要靠它判断要不要补判当根剩余行情
+         (市价单成交在当根收盘那一刻, 当根没有剩余行情 → 不用补) */
+      this._entryTrigger = ctx.entryTrigger || null;
+      this._entrySubDone = false;
       this._posSetupId = ctx.setupId || (typeof App !== 'undefined' ? App.pendingSetup : null) || null;
       this._posCycle = ctx.cycle || (typeof App !== 'undefined' ? App.pendingCycle : null) || null;
       this._addOns = 0; this._maxQty = Math.abs(this.pos);
@@ -392,6 +427,7 @@ const Trading = {
       this._settle(epoch, off, avgBefore, ctx);
       this.tp = null; this.sl = null;
       this.entryBar = null; this._entryEpoch = null; this._tpGuard = false;
+      this._entryTrigger = null; this._entrySubDone = false;
       this._entryPrice = null; this._entryTime = ''; this._entrySide = null;
       this._posSetupId = null; this._posCycle = null;
       this._addOns = 0; this._maxQty = 0;
