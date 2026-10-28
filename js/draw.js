@@ -22,12 +22,20 @@ const Draw = {
 
   COLOR: '#2962ff',
   BAR_IDX_COLOR: '#f7a600',
-  /** 成交标记的大箭头 (照用户 2026-10-22 截图逐像素实测: 包围盒 33×38, 杆 19 宽 × 18 高) */
-  /* 成交标记的大箭头 —— 照 reference/21 (1263×915) 逐像素实测:
+  /** 手动标注的上/下箭头 (粗块) —— 照 reference/21 (1263×915) 逐像素实测:
      包围盒 33×38 **device px**, 而那张图是 2x (同图 Bar Count 数字墨迹 15 device,
      和 reference/20 标定时完全一致) ⇒ 实际 **16.5 × 19 CSS px**, 杆 9.5 宽 × 9 高。
-     一开始按 device px 当 CSS 用, 画出来整整大一倍, 这里改回来。 */
+     一开始按 device px 当 CSS 用, 画出来整整大一倍, 这里改回来。
+
+     用户 2026-10-28 定的分工:
+       粗块箭头 = 我自己手动标注的 (上/下箭头工具)
+       细箭头   = 系统按实际成交自动标出来的 (见下面的 LINE_MARK)
+     之前两边共用这一个字形, 于是"我画的标记"和"真实成交"在盘面上完全分不开。 */
   MARK: { w: 16.5, h: 19, stemW: 9.5, stemH: 9 },
+  /* 自动成交标记的细箭头: 一根杆 + 倒 V 头, 只描边不填充, 包围盒 10×16。
+     比粗块矮 3px、窄 6.5px, 加上"只有线没有面", 跟手动箭头一眼分得开。
+     head = 两翼在杆上的分界离尖端多远。 */
+  LINE_MARK: { w: 10, h: 16, head: 6, sw: 1.5 },
   MARK_UP: '#70ccbd',       // 买 (在 K 线下方, 箭头朝上) — 截图 rgb(112,204,189)
   MARK_DOWN: '#cc2f3c',     // 卖 (在 K 线上方, 箭头朝下) — 截图 rgb(204,47,60)
   /* 出场 (平仓) 用灰 —— 用户 2026-10-24 拍板:
@@ -626,7 +634,12 @@ const Draw = {
 
     // 绘图工具: TradingView 式两次点击 —— 第一次定起点, 移动后第二次点击完成
     e.preventDefault(); e.stopPropagation();
-    const p = this.snapPrice(x, y);
+    /* 上/下箭头不磁吸 (用户 2026-10-28 定): 手动标注是"我点的哪个价就落在哪个价",
+       吸附过去等于替我挪了位置 —— 而且它标的是形态/情绪, 不是开高低收这几个数。
+       磁吸开关只影响真正要贴价的工具 (趋势线/水平线/矩形/斐波那契)。
+       注意 pOf() 而不是 snapPrice(): 不论 Draw.magnet 开没开, 一律取原始价。 */
+    const isArrowTool = (this.tool === 'arrowup' || this.tool === 'arrowdown');
+    const p = isArrowTool ? this.pOf(y) : this.snapPrice(x, y);
     if (p == null) return;
 
     if (this.tool === 'hline') { this.pushHistory(); this.addItem({ type: 'hline', a: { t, p }, b: { t, p } }); this.setTool('cursor'); return; }
@@ -754,7 +767,9 @@ const Draw = {
       e.stopPropagation(); e.preventDefault();
       const it = this.items.find(i => i.id === this._drag.id);
       if (!it) return;
-      const t = this.timeAtX(x), p = this.snapPrice(x, y);
+      const t = this.timeAtX(x);
+      /* 手动箭头拖动时同样不磁吸 —— 只改落点不改拖动, 拖一下又吸回去, 等于没改 */
+      const p = (it.type === 'arrow') ? this.pOf(y) : this.snapPrice(x, y);
       const part = this._drag.part;
 
       if (it.type === 'hline') { it.a.p = p; it.b.p = p; }
@@ -1099,10 +1114,10 @@ const Draw = {
     }, true);
   },
 
-  /** 成交标记: 大箭头 ----------
+  /** 手动标注箭头的粗块字形 (上/下箭头工具)
      照用户 2026-10-22 截图逐像素描出来: 杆 19×18 + 三角头 33×20, 总 33×38, 平头平尾无描边。
-     买 = K 线下方、箭头朝上、青绿 #70ccbd; 卖 = K 线上方、朝下、红 #cc2f3c。
-     出场 (m.isExit) 不分方向一律灰 #787b86 —— 见 MARK_EXIT 的注释。 */
+     买 = 青绿 #70ccbd 朝上; 卖 = 红 #cc2f3c 朝下 (手动箭头沿用这两个颜色, 靠形状跟成交标记分开)。
+     成交标记 v1.2.21 起不再用它, 改走 lineArrow()。 */
   arrowShape(ctx, cx, cy, dir) {
     const { w, h, stemW, stemH } = this.MARK;
     const half = w / 2, sh = stemW / 2;
@@ -1130,6 +1145,24 @@ const Draw = {
     ctx.closePath();
   },
 
+  /** 自动成交标记的细箭头 (v1.2.21): 只描边不填充。
+      方向 dir>0 朝上(买) / dir<0 朝下(卖); 尖端落在包围盒那一侧的外缘,
+      所以调用方按"尖端离 K 线 MARK_GAP"去算 cy 就能跟粗块箭头贴得一样近。 */
+  lineArrow(ctx, cx, cy, dir) {
+    const m = this.LINE_MARK;
+    const hw = m.w / 2, hh = m.h / 2;
+    const tip = dir > 0 ? cy - hh : cy + hh;
+    const tail = dir > 0 ? cy + hh : cy - hh;
+    const base = dir > 0 ? tip + m.head : tip - m.head;   // 两翼与杆的分界
+    ctx.beginPath();
+    ctx.moveTo(cx, tip);
+    ctx.lineTo(cx - hw, base);
+    ctx.moveTo(cx, tip);
+    ctx.lineTo(cx + hw, base);
+    ctx.moveTo(cx, tip);
+    ctx.lineTo(cx, tail);
+  },
+
   drawTradeMarkers(ctx) {
     const list = (typeof ChartMgr !== 'undefined' && ChartMgr.markers) || [];
     if (!list.length || !ChartMgr.barByTime) return;
@@ -1138,6 +1171,9 @@ const Draw = {
     ctx.beginPath();
     ctx.rect(0, 0, this.W - axW, this._priceAreaHeight());   // 别画到右侧价格轴/时间轴上
     ctx.clip();
+    ctx.lineWidth = this.LINE_MARK.sw;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     for (const m of list) {
       const b = ChartMgr.barByTime(m.time);
       if (!b) continue;
@@ -1145,11 +1181,11 @@ const Draw = {
       const yEdge = this.yOf(buy ? b.l : b.h);
       const x = this.xOf(b.t);
       if (yEdge == null || x == null) continue;
-      const half = this.MARK.h / 2;
+      const half = this.LINE_MARK.h / 2;
       const cy = buy ? yEdge + this.MARK_GAP + half : yEdge - this.MARK_GAP - half;
-      this.arrowShape(ctx, x, cy, buy ? 1 : -1);
-      ctx.fillStyle = m.isExit ? this.MARK_EXIT : (buy ? this.MARK_UP : this.MARK_DOWN);
-      ctx.fill();
+      this.lineArrow(ctx, x, cy, buy ? 1 : -1);
+      ctx.strokeStyle = m.isExit ? this.MARK_EXIT : (buy ? this.MARK_UP : this.MARK_DOWN);
+      ctx.stroke();
     }
     ctx.restore();
   },

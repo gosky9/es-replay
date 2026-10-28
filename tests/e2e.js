@@ -972,6 +972,68 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         snapProbe.pts === 3 && snapProbe.okNear === true && snapProbe.okFar === true,
         JSON.stringify(snapProbe));
 
+  /* 手动标注的上/下箭头: 一、不磁吸 (2026-10-28 用户定: 磁吸开不开都不吸)
+     二、仍然是粗块, 跟自动成交的细箭头分得开。
+     判据用真实鼠标点: 故意点在"离收盘价 1 点"的位置 —— 磁吸开着时, 趋势线早就被拽过去了。
+     先给图层拍个快照: 这一块要清空了才量得准, 但后面「尺子只保留最新一个」还要数到
+     前面画的那条趋势线 —— clearAll() 会连 _all.byTf 和 localStorage 一起清掉,
+     所以收尾必须把整份快照写回去, 不能只是"清干净"。 */
+  const drawSnap = await page.evaluate(() => {
+    const snap = JSON.parse(JSON.stringify(Draw.items));
+    Draw.clearAll(); Draw.magnet = true; Draw.setTool('arrowdown');
+    return snap;
+  });
+  const aim = await page.evaluate(() => {
+    const bars = ChartMgr._lastData;
+    const b = bars[Math.max(0, bars.length - 20)];
+    const r = document.getElementById('chartArea').getBoundingClientRect();
+    return {
+      x: r.left + Draw.xOf(b.t), y: r.top + Draw.yOf(b.c + 1),
+      c: b.c, want: b.c + 1,
+    };
+  });
+  await page.mouse.click(aim.x, aim.y);
+  await page.waitForTimeout(220);
+  const arrowDraw = await page.evaluate(() => {
+    const it = Draw.items.find(i => i.type === 'arrow');
+    if (!it) return null;
+    const px = Draw._px(it.a);
+    const c = document.getElementById('drawLayer');
+    const k = c.width / parseFloat(c.style.width || c.width);
+    const R = Math.round(Draw.MARK.w * k);
+    const bx = Math.round(px.x * k), by = Math.round(px.y * k);
+    if (bx - R < 0 || by - R < 0) return { err: '画布外' };
+    const S = R * 2, d = c.getContext('2d').getImageData(bx - R, by - R, S, S).data;
+    let n = 0, x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1;
+    for (let yy = 0; yy < S; yy++) for (let xx = 0; xx < S; xx++) {
+      const o = (yy * S + xx) * 4;
+      if (Math.abs(d[o] - 204) < 12 && Math.abs(d[o + 1] - 47) < 12 && Math.abs(d[o + 2] - 60) < 12) {
+        n++;
+        if (xx < x0) x0 = xx; if (xx > x1) x1 = xx;
+        if (yy < y0) y0 = yy; if (yy > y1) y1 = yy;
+      }
+    }
+    return {
+      p: it.a.p, magnet: Draw.magnet, n,
+      w: x1 >= x0 ? +((x1 - x0 + 1) / k).toFixed(1) : 0,
+      h: y1 >= y0 ? +((y1 - y0 + 1) / k).toFixed(1) : 0,
+    };
+  });
+  check('手动上下箭头不磁吸 (磁吸开着也落在光标那个价)',
+        arrowDraw && arrowDraw.magnet === true
+        && Math.abs(arrowDraw.p - aim.want) < 0.25 && Math.abs(arrowDraw.p - aim.c) > 0.5,
+        JSON.stringify({ 落点: arrowDraw && arrowDraw.p, 收盘: aim.c, 期望: aim.want }));
+  check('手动上下箭头仍是粗块 ~17×20 (比细箭头墨水多一倍以上)',
+        arrowDraw && arrowDraw.n > 150 && Math.abs(arrowDraw.w - 17) <= 2 && Math.abs(arrowDraw.h - 20) <= 2,
+        JSON.stringify(arrowDraw));
+  await page.evaluate((snap) => {
+    Draw.clearAll();
+    Draw.items = snap;
+    Draw.selected = null; Draw.draft = null; Draw._drag = null;
+    Draw.render(); Draw.save();                 // 快照写回存档, 后面 restore() 读到的就是它
+    Draw.magnet = false; Draw.setTool('cursor');
+  }, drawSnap);
+
   /* 弹窗遮罩只压暗、不做背景模糊 (v1.2.17)。
      用户 2026-10-26: 入场选 setup 时后面的 K 线糊了, 看得见看不清反而更费劲。
      backdrop-filter 一旦被加回来, 这里会红。 */
@@ -1683,7 +1745,9 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
       const buy = m.shape === 'arrowUp';
       const col = buy ? [112, 204, 189] : [204, 47, 60];
       const ye = Draw.yOf(buy ? b.l : b.h);
-      const cy = buy ? ye + Draw.MARK_GAP + Draw.MARK.h / 2 : ye - Draw.MARK_GAP - Draw.MARK.h / 2;
+      /* v1.2.21: 自动成交标记换成细箭头 LINE_MARK, 采样中心要跟着走 */
+      const cy = buy ? ye + Draw.MARK_GAP + Draw.LINE_MARK.h / 2
+                     : ye - Draw.MARK_GAP - Draw.LINE_MARK.h / 2;
       const x = Draw.xOf(b.t);
       const key = (buy ? 'b' : 's') + m.time;
       if (seen.has(key)) continue;
@@ -1710,10 +1774,14 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
     }
     return { marks: out, nMarks: ChartMgr.markers.length };
   });
-  check('成交标记在绘图层画成大箭头 16.5×19 (买=#70ccbd 朝上 / 卖=#cc2f3c 朝下)',
+  /* v1.2.21 用户定: 自动成交标记 = 细箭头 (只有线条), 手动标注 = 原来的粗块。
+     细箭头包围盒 10×16 + 1.5 描边 ⇒ 实测 12×18, 墨水约 70 像素;
+     粗块是 16.5×19 实心, 墨水约 200 像素 —— 两个数差三倍, 这就是"一眼分得开"的依据。 */
+  check('自动成交标记画成细箭头 12×18 (买=#70ccbd 朝上 / 卖=#cc2f3c 朝下)',
         markPix.nMarks >= 2 && markPix.marks.length >= 2
         && markPix.marks.filter(m => m.buy).length >= 1 && markPix.marks.filter(m => !m.buy).length >= 1
-        && markPix.marks.every(m => m.n > 90 && Math.abs(m.w - 16.5) <= 2 && Math.abs(m.h - 19) <= 2),
+        && markPix.marks.every(m => m.n > 40 && m.n < 110
+               && Math.abs(m.w - 12) <= 2 && Math.abs(m.h - 18) <= 2),
         JSON.stringify(markPix));
 
   /* ---- 入场 / 出场 靠颜色区分 (用户 2026-10-24: 原来两者同色, 分不清 → 出场改灰 #787b86) ----
@@ -1796,7 +1864,9 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
       if (!b) { out.push({ miss: m.time }); continue; }
       const buy = m.shape === 'arrowUp';
       const ye = Draw.yOf(buy ? b.l : b.h);
-      const cy = buy ? ye + Draw.MARK_GAP + Draw.MARK.h / 2 : ye - Draw.MARK_GAP - Draw.MARK.h / 2;
+      /* v1.2.21: 自动成交标记换成细箭头 LINE_MARK, 采样中心要跟着走 */
+      const cy = buy ? ye + Draw.MARK_GAP + Draw.LINE_MARK.h / 2
+                     : ye - Draw.MARK_GAP - Draw.LINE_MARK.h / 2;
       const x = Draw.xOf(b.t);
       out.push({
         exit: !!m.isExit, buy, pos: m.position, time: m.time,
@@ -1805,10 +1875,12 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
     }
     return out;
   });
+  /* 阈值放宽到 40: v1.2.21 起成交标记是"只描边"的细箭头, 同样 16×16 的取样窗里
+     墨水从粗块的 ~200 掉到 ~68 (实测 teal 68 / gray 69), 但"这枚有色 / 那枚没有"的对比不受影响。 */
   check('入场箭头仍是青绿 #70ccbd, 出场箭头画成灰 #787b86',
         mkColor.length === 2
-        && mkColor[0].exit === false && mkColor[0].teal > 90 && mkColor[0].gray < 30
-        && mkColor[1].exit === true && mkColor[1].gray > 90 && mkColor[1].teal < 30 && mkColor[1].red < 30,
+        && mkColor[0].exit === false && mkColor[0].teal > 40 && mkColor[0].gray < 30
+        && mkColor[1].exit === true && mkColor[1].gray > 40 && mkColor[1].teal < 30 && mkColor[1].red < 30,
         JSON.stringify(mkColor));
 
   /* 手动平空仓时的箭头方向: 曾经有个 bug —— addMarker 在 fill 之后才读 Trading.pos,
