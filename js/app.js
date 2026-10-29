@@ -1385,11 +1385,24 @@ const App = {
     return (p > 0 ? '+' : '') + s;
   },
 
-  /** 最近 n 根已走出的 K 线 (不含当前这根) —— 新开仓的止损取这里面的极值 */
+  /** 止损取的样本: **前 n 根 + 当前这根** (共 n+1 根)
+   *
+   *  v1.2.22 改口径 (用户 2026-10-29 定): 原来只取 `slice(idx-n, idx)` —— 右端开区间,
+   *  当前这根完全不参与。但市价单的成交价就是 `cur.c`, **入场那根就是当前这根**,
+   *  它的 h/l 显然该算进"最近这几根"里。漏掉它有两个后果:
+   *    1) 48% 的情形止损价位跟正确口径不同 (原先只统计到偏高的那 26%, 双向合计 48%);
+   *    2) 约 9~13% 的情形止损会跑到入场价的**错误一侧**: 大阴线收盘做多时,
+   *       前 5 根的最低价还在现价上方 ⇒ 多头止损挂在入场价上方。
+   *  加上当前根之后第 2 条结构上就不可能: `sl ≤ 当根最低 - 1tick < 当根收盘 = 入场价`。
+   *
+   *  为什么是 n+1 根而不是"最近 n 根"(挤掉最老的): 后者实测会让 28.2% 的情形止损**变紧**
+   *  (最多紧 22 点), 而"前 n 根 + 当前根"永远不会比原来更紧, 只会更松或不变
+   *  (实测 0% 变紧) —— 改口径不该顺手把用户的止损收紧。 */
   prevBars(n = 5) {
     const e = this.engine;
     if (!e || !e.bars || !e.bars.length) return [];
-    return e.bars.slice(Math.max(0, e.idx - n), e.idx);
+    const hi = Math.min(e.idx, e.bars.length - 1);
+    return e.bars.slice(Math.max(0, hi - n), hi + 1);
   },
 
   /** 本场已完成的一笔交易 (账本按 sessionId 切; 一笔交易一行, 不是成交流水) */
@@ -2000,7 +2013,7 @@ const App = {
     this.syncSetupUI();
   },
 
-  /** 突破单的机械止盈止损: 前 5 根极值外 1 tick 当止损, 止盈 = 2R */
+  /** 突破单的机械止盈止损: 前 5 根 + 挂单那根共 6 根的极值外 1 tick 当止损, 止盈 = 2R */
   plannedBrackets(side, entryPx, prev) {
     const tick = Trading.TICK || 0.25;
     const long = side === 'buy';
@@ -2252,7 +2265,7 @@ const App = {
 
   /** 每根 K 线的交易事件: 突破单触发 + 止盈止损 */
   runTradeChecks(bar, idx) {
-    // prev = 入场那根之前的 5 根, 用来算"前 5 根极值"止损 (Trading.SL_LOOKBACK)
+    // prev = 前 5 根 + 当前这根 (共 6 根), 用来算"前 5 根极值"止损 (Trading.SL_LOOKBACK)
     const evs = Trading.checkBar(bar, bar.epoch, bar.off, { prev: this.prevBars(Trading.SL_LOOKBACK) });
     this.applyTradeEvents(evs);
     /* 这一根里刚成交的(突破单/限价单) → 成交之后还有一段行情要走, 补判它。

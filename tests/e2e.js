@@ -1917,6 +1917,11 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
       hit: !!ChartMgr.barByTime(m.time),
     }));
     if (Trading.pos !== 0) App.closePosition();
+    /* 上面这句会把前一段用例留下的持仓平掉, 那条记录的时间/价格就是**当前这根**。
+       下面新造的空单也开在同一根同一个收盘价上, 两条记录于是同格 → 出场箭头一个朝下一个朝上,
+       按 (时间,价格) 挑就挑出两枚来。先推进一根把两者错开, 断言才能保持"逐枚核对"的严格度。
+       (v1.2.22 起止损更宽, 突破单那笔更容易活到这里, 才把这个撞格问题暴露出来) */
+    App.engine.step(1);
 
     // 造一笔真交易进账本 (空单: 入场朝下红, 出场朝上灰)
     /* 注意不能用 trades[trades.length-1] 取"刚那笔": Journal.addTrade 内部按 exitEpoch 排序,
@@ -3631,6 +3636,98 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
   });
   check('市价单当根不会被误平', mktEntry.pos !== 0 && mktEntry.kind === 'market', JSON.stringify(mktEntry));
   await page.evaluate(() => Trading.reset());
+
+  /* ---- v1.2.22: 自动止损的取样区间必须**含入场那根** ----
+     用户 2026-10-29: 「开单自动设置止损的时候，好像没把当前 k 算进来」—— 确实如此。
+     prevBars 原来是 slice(idx-n, idx)，右端开区间，当前这根本不参与；而市价单的成交价
+     就是 cur.c，入场那根就是当前这根。漏掉它有两个后果，这里各钉一条用例：
+       a) 停顿位跟正确口径不一样（48% 的情形）；
+       b) 约 9~13% 的情形止损落到入场价的**错误一侧**（大阴线收盘做多时）。
+     口径 (用户选的 B): 前 5 根 + 当前根 = 6 根。选 B 不选"最近 5 根"是因为后者实测
+     会让 28.2% 的止损变紧（最多紧 22 点），改口径不该顺手把止损收紧。 */
+  const slCur = await page.evaluate(() => {
+    const e = App.engine;
+    const tick = Trading.TICK || 0.25;
+    const i0 = e.idx;
+    const out = {};
+
+    /* 1) prevBars 语义: 拿 6 根, 最后一根是当前这根, 首根是 idx-5 */
+    const pb = App.prevBars(5);
+    out.prev = {
+      n: pb.length,
+      末根是当前根: pb[pb.length - 1] === e.bars[i0],
+      首根是idx减5: pb[0] === e.bars[i0 - 5],
+    };
+
+    /* 2) 挑一根「当根最低价比前 5 根(不含自己)最低价还低」的 K 线 —— 旧口径下
+          多头止损会跑到入场价上方, 是最能暴露问题的样本 */
+    let pick = null;
+    for (let i = Math.max(6, i0 - 400); i <= i0; i++) {
+      const oldMin = Math.min(...e.bars.slice(i - 5, i).map(b => b.l));
+      if (oldMin - tick > e.bars[i].c) { pick = i; break; }
+    }
+    if (pick == null) return { err: '这一段里没有错侧样本' };
+
+    e.idx = pick;
+    const cur = e.bars[pick];
+    if (Trading.pos !== 0) Trading.reset();
+    Trading.stops = []; ChartMgr.setMarkers([]);
+    App.orderType = 'market';
+    document.getElementById('orderQty').value = '1';
+    App._doPlaceOrder('buy');
+
+    const wantSl = Math.min(...e.bars.slice(pick - 5, pick + 1).map(b => b.l)) - tick;
+    out.market = {
+      当根收: cur.c, 当根低: cur.l, 入场: Trading._entryPrice,
+      旧口径止损: +(Math.min(...e.bars.slice(pick - 5, pick).map(b => b.l)) - tick).toFixed(2),
+      实际止损: Trading.sl, 期望止损: +wantSl.toFixed(2),
+      止损在入场价下方: Trading.sl < Trading._entryPrice,
+    };
+    Trading.reset();
+
+    /* 3) 突破单挂单: 同样含挂单那根 */
+    Trading.stops = [];
+    App._doStopOrderAtBarEdge('buy');
+    const s = Trading.stops[Trading.stops.length - 1];
+    out.stop = {
+      挂单价: s && s.price, 止损: s && s.sl,
+      期望止损: +wantSl.toFixed(2),
+      止损在挂单价下方: !!(s && s.sl < s.price),
+    };
+    Trading.stops = []; Trading.reset();
+
+    /* 4) 扫 300 根: 含当前根之后, 多空两侧都不可能再把止损放到入场价的错误一侧 */
+    let bad = 0, n = 0;
+    for (let i = Math.max(5, i0 - 300); i <= i0; i++) {
+      e.idx = i;
+      const arr = App.prevBars(5);
+      const entry = e.bars[i].c;
+      n++;
+      if (Math.min(...arr.map(b => b.l)) - tick >= entry) bad++;   // 做多错侧
+      if (Math.max(...arr.map(b => b.h)) + tick <= entry) bad++;   // 做空错侧
+    }
+    out.scan = { n, 错侧: bad };
+
+    e.idx = i0;
+    e.onTick && e.onTick(e.bars[i0], i0, false);
+    ChartMgr.setMarkers([]);
+    return out;
+  });
+  check('自动止损的取样含入场那根 (prevBars = 前 5 根 + 当前根)',
+        slCur.prev && slCur.prev.n === 6 && slCur.prev.末根是当前根 && slCur.prev.首根是idx减5,
+        JSON.stringify(slCur.prev));
+  check('市价买单止损 = 前 5 根 + 当根的最低价 - 1tick, 且必在入场价下方',
+        slCur.market && Math.abs(slCur.market.实际止损 - slCur.market.期望止损) < 1e-6
+        && slCur.market.止损在入场价下方 === true
+        && Math.abs(slCur.market.实际止损 - slCur.market.旧口径止损) > 1e-6,
+        JSON.stringify(slCur.market));
+  check('突破单挂单止损同样取含挂单那根的样本, 且在挂单价下方',
+        slCur.stop && slCur.stop.止损 && Math.abs(slCur.stop.止损 - slCur.stop.期望止损) < 1e-6
+        && slCur.stop.止损在挂单价下方 === true,
+        JSON.stringify(slCur.stop));
+  check('扫 300 根: 止损不会再落到入场价的错误一侧',
+        slCur.scan && slCur.scan.n === 301 && slCur.scan.错侧 === 0,
+        JSON.stringify(slCur.scan));
 
   /* 这一段会真的往账本里记一笔 → 单独再还原一次, 别把测试单留在用户的账本里 */
   await restoreJournal(journalBackup);
