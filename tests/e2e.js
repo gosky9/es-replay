@@ -2372,6 +2372,100 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         JSON.stringify(fibInfo));
   await page.evaluate(() => Draw.clearAll());
 
+  /* ⑦b 斐波那契的命中域: 只认画出来的东西 (用户 2026-10-29「拉大了之后老是误触, 离很远就能点到」)
+     原来 fib 和 rect/measure 共用「矩形内部全命中」, 可 rect/measure 有淡色填充, fib 是空心的 ——
+     实测 596x420 的 fib 有 94.4% 的命中点落在空白区, 两条线正中间(离最近线 210px)都能点中。 */
+  const fibHit = await page.evaluate(() => {
+    Draw.removeAll();
+    const bars = ChartMgr._lastData;
+    const W = Draw.W, H = Draw._priceAreaHeight();
+    const mk = (x0, y0, x1, y1) => {
+      const i0 = Math.round(Draw.logicalAtX(x0)), i1 = Math.round(Draw.logicalAtX(x1));
+      return {
+        id: 't-fib', type: 'fib', z: 1e9, color: '#2962ff',
+        a: { t: bars[Math.max(0, Math.min(bars.length - 1, i0))].t, p: Draw.pOf(y0) },
+        b: { t: bars[Math.max(0, Math.min(bars.length - 1, i1))].t, p: Draw.pOf(y1) },
+      };
+    };
+    const big = mk(200, 180, 800, 600);                  // 600x420 的"拉大"的斐波那契
+    Draw.items = [big];
+    const ax = Draw.xOf(big.a.t), ay = Draw.yOf(big.a.p);
+    const bx = Draw.xOf(big.b.t), by = Draw.yOf(big.b.p);
+    const xm = (ax + bx) / 2;
+    const pA = big.a.p, pB = big.b.p;
+    const yOfLv = lv => Draw.yOf(pB + (pA - pB) * lv);
+    const lvls = big.levels || Draw.FIB;
+
+    // ① 每条 level 线正中都要能点 (含画在 A~B 区间之外的 -1 / -2)
+    const lines = lvls.map(lv => {
+      const y = yOfLv(lv);
+      const h = y == null ? null : Draw.hitTest(xm, y);
+      return {
+        lv, y: y == null ? null : Math.round(y),
+        框外: y != null && (y < Math.min(ay, by) || y > Math.max(ay, by)),
+        hit: !!(h && h.id === 't-fib'),
+      };
+    });
+
+    // ② 两条线正中间 (离最近线 210px) 必须点不到
+    const midY = (ay + by) / 2;
+    const midHit = Draw.hitTest(xm, midY);
+
+    // ③ 整画布 3px 网格扫一遍: 空白区误触必须为 0
+    //    "合法命中"只有三种: 某条 level 线的横段 (±6px) / 该线左端的 `级别 (价格)` 标签 (±7px) /
+    //    两个锚点手柄 (±8px, 拖 A/B 用)
+    let hit = 0, total = 0, blank = 0;
+    const levelYs = lvls.map(yOfLv).filter(v => v != null);
+    const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx);
+    const 合法 = (x, y) => {
+      const 线段 = x >= x0 - 6 && x <= x1 + 6 && levelYs.some(yy => Math.abs(y - yy) <= 6);
+      const 标签 = x <= x0 - 12 && levelYs.some(yy => Math.abs(y - yy) <= 7);
+      const 锚点 = Math.hypot(x - ax, y - ay) <= 8 || Math.hypot(x - bx, y - by) <= 8;
+      return 线段 || 标签 || 锚点;
+    };
+    for (let y = 0; y < H; y += 3) {
+      for (let x = 0; x < W; x += 3) {
+        total++;
+        const h = Draw.hitTest(x, y);
+        if (!h || h.id !== 't-fib') continue;
+        hit++;
+        if (!合法(x, y)) blank++;
+      }
+    }
+
+    // ④ 左侧 `级别 (价格)` 灰字 (0 级线左侧 20px) 也要能点
+    const lblHit = Draw.hitTest(ax - 20, yOfLv(0));
+
+    // ⑤ rect 有淡色填充, 整框命中是对的 —— 不能被这次改动牵连
+    Draw.items = [Object.assign({}, big, { id: 't-rect', type: 'rect' })];
+    const rectMid = Draw.hitTest(xm, midY);
+
+    Draw.items = [];
+    Draw.removeAll();
+    return {
+      lines,
+      框外条数: lines.filter(l => l.框外).length,
+      全部可点: lines.every(l => l.hit),
+      midY: Math.round(midY),
+      midHit: !!(midHit && midHit.id === 't-fib'),
+      命中: hit, 总: total, 命中率: +(hit / total * 100).toFixed(1), 空白: blank,
+      标签可点: !!(lblHit && lblHit.id === 't-fib'),
+      rectMid: !!(rectMid && rectMid.id === 't-rect'),
+    };
+  });
+  check('斐波那契各级别线正中都点得到(含画在 A~B 区间外的 -1/-2)',
+        fibHit.全部可点 && fibHit.框外条数 >= 2,
+        JSON.stringify(fibHit.lines));
+  check('斐波那契两条线正中间(离最近线上百 px)点不到',
+        fibHit.midY > 150 && fibHit.midHit === false,
+        `中线 y=${fibHit.midY} 命中=${fibHit.midHit}`);
+  check('斐波那契整框误触归零(空白区命中 = 0, 命中率 < 5%)',
+        fibHit.空白 === 0 && fibHit.命中率 < 5,
+        `命中 ${fibHit.命中}/${fibHit.总} = ${fibHit.命中率}% 空白 ${fibHit.空白}`);
+  check('斐波那契左侧 `级别 (价格)` 标签能点，rect 仍是整框命中',
+        fibHit.标签可点 && fibHit.rectMid,
+        `标签=${fibHit.标签可点} rect中线=${fibHit.rectMid}`);
+
   // 撤销 / 重做
   await page.click('#drawBar button[data-tool="hline"]');
   const boxU = await page.locator('#chartMain').boundingBox();

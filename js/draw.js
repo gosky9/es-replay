@@ -939,16 +939,78 @@ const Draw = {
       if (dist(bx, by) < TH + 2) return { id: it.id, part: 'b' };
       if (it.type === 'trend') {
         if (this._distSeg(x, y, ax, ay, bx, by) < TH) return { id: it.id, part: 'body' };
-      } else if (it.type === 'rect' || it.type === 'fib' || it.type === 'measure') {
+      } else if (it.type === 'fib') {
+        /* fib 单独判 —— 它是空心的, 不能整框都算命中。详见 _hitFib 的注释。 */
+        if (this._hitFib(it, x, y, ax, ay, bx, by)) return { id: it.id, part: 'body' };
+      } else if (it.type === 'rect' || it.type === 'measure') {
+        /* rect / measure 画了 10%~14% 的淡色填充, 框内整块可点是**对的**(和 TV 一致), 保持原样。
+           以前 fib 也走这一段, 注释写着「靠近边框才算命中」但代码里根本没实现 —— 
+           用户 2026-10-29 报的误触就是它。 */
         const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx);
         const y0 = Math.min(ay, by), y1 = Math.max(ay, by);
         if (x > x0 - TH && x < x1 + TH && y > y0 - TH && y < y1 + TH) {
-          // 靠近边框才算命中, 内部命中给 body 平移
           return { id: it.id, part: 'body' };
         }
       }
     }
     return null;
+  },
+
+  /** 斐波那契的命中域 —— **只认真正画出来的东西**, 不是整块矩形。
+   *
+   *  用户 2026-10-29: 「斐波纳契拉大了之后老是误触, 离很远就能点到」。
+   *  原来 fib 在 hitTest 里和 rect/measure 共用一段「矩形内部全命中」, 但
+   *  rect/measure 画了淡色填充(整块可点是合理的), fib 是**纯空心**的: 中间一片透明,
+   *  只有 4 条 level 横线 + 左侧 `级别 (价格)` 灰字 + 绘制过程中那两个圆点。
+   *  实测一个 596x420 的 fib: 命中占全画布 26.1%, 其中 **94.4% 落在空白区**,
+   *  两条 level 线正中间(离最近那条 210px)照样一点就中 —— 而且中一下就 bringToFront,
+   *  它那片大框还会继续压住所有更早画的图元。
+   *
+   *  所以这里只认三样:
+   *    1) 每条 level 线在 x0..x1 之间的那一段 (±6px)
+   *    2) 两个锚点 (±8px, 拖拽改 A/B 用, 由 hitTest 外层先判, 这里不管)
+   *    3) 左侧那块 `级别 (价格)` 标签 (±7px) —— 原来画得出、点不到
+   *
+   *  顺带修一件事: FIB 是 [1, 0, -1, -2], 后两条算出来的价格落在 A~B 区间**之外**。
+   *  老代码的 y 范围只取 ay..by, 于是这两条线画布内可见却点不到。改成「每条线各自
+   *  算 y」之后就没有"框"这个概念了, 自然覆盖。 */
+  _hitFib(it, x, y, ax, ay, bx, by) {
+    const TH = 6;
+    const x0 = Math.min(ax, bx), x1 = Math.max(ax, bx);
+    // drawItem 里「整条滚出视野外就整个不画」那道闸, 命中要跟着一致
+    if (x1 < 0 || x0 > this.W) return false;
+    if (x > x1 + TH) return false;            // 右边除了线段本体什么都不会画, 早点放行给下层
+    const pA = it.a.p, pB = it.b.p;
+    for (const lv of (it.levels || this.FIB)) {
+      const price = pB + (pA - pB) * lv;
+      const yy = this.yOf(price);
+      if (yy == null) continue;
+      const dy = Math.abs(y - yy);
+      if (dy > 7) continue;                   // 纵向不在这条线上, 连横向都不用算
+      if (dy <= TH && x >= x0 - TH && x <= x1 + TH) return true;      // 1) 线段本体
+      // 2) 左侧标签块 —— 位置必须和 drawItem 里那段一模一样:
+      //    左边放得下就在 x0-12 处右对齐, 否则贴到画布左边缘 x=6 左对齐
+      const tw = this._fibLabelW(`${lv} (${this._fmtPrice(price)})`);
+      if (x0 - 12 - tw >= 2) {
+        if (x <= x0 - 12 && x >= x0 - 12 - tw) return true;
+      } else if (x >= 6 && x <= 6 + tw) return true;
+    }
+    return false;
+  },
+
+  /** `级别 (价格)` 标签的像素宽 (13px 字体)。按文本缓存 —— 鼠标每动一下都要用, 别每次都量 */
+  _fibLabelW(txt) {
+    const c = this._fibWCache || (this._fibWCache = new Map());
+    let w = c.get(txt);
+    if (w != null) return w;
+    const ctx = this.ctx;
+    if (!ctx) return txt.length * 7;
+    ctx.save();
+    ctx.font = '13px -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif';
+    w = ctx.measureText(txt).width;
+    ctx.restore();
+    c.set(txt, w);
+    return w;
   },
 
   _distSeg(px, py, x1, y1, x2, y2) {
