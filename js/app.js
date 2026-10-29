@@ -619,14 +619,22 @@ const App = {
 
   savePos() {
     if (!this.engine || !this.engine.current) return;
-    const cur = this.engine.current;
     clearTimeout(this._posTimer);
     this._posTimer = setTimeout(() => {
-      if (!this.engine) return;
+      if (!this.engine || !this.engine.current) return;
+      /* current 必须在延迟里读: 回放播着的时候索引一直在走, 调用时就取好会跟下面读的
+         engine.idx 差几根 (v1.2.23 顺手修)。 */
+      const cur = this.engine.current;
       try {
         localStorage.setItem(this.POS_KEY, JSON.stringify({
           tf: this.tf, session: this.session,
           anchor: this.targetEpoch, idx: this.engine.idx,
+          /* epoch 才是"我看到哪一根"的绝对坐标 —— idx 是**bars 数组下标**, 而 bars 会被
+             loadMoreHistory() 往前补 (每补一段 idx 整体 +400), anchor 却不跟着变。
+             老版本只存 idx, 于是"往左拖看过历史"之后再刷新, 「继续上次」会往前跳掉
+             整整补进来的那几段 (2026-10-29 用户实测跳了 1602 根 ≈ 19 个交易日)。
+             恢复时优先按 epoch 找最近一根, idx 只当兜底。 */
+          epoch: cur.epoch,
           time: etTimeStr(cur.epoch, cur.off).replace(' ET', ''),
         }));
       } catch (e) { /* 隐私模式写不进去就算了 */ }
@@ -775,6 +783,7 @@ const App = {
     const from = meta.usableFrom ? Math.floor(new Date(meta.usableFrom + 'T00:00:00Z').getTime() / 1000) : meta.range.first;
     const last = meta.range.last - 86400 * 2;
     this._resumeIdx = null;
+    this._resumeEpoch = null;
     if (this.mode === 'resume') {
       // 继续上次: 用上次的锚点重建同一段窗口, 再 seek 回看到的那一根
       const sp = this.savedPos();
@@ -784,6 +793,9 @@ const App = {
       } else {
         this.targetEpoch = sp.anchor;
         this._resumeIdx = sp.idx;
+        /* epoch 优先: idx 是 bars 下标, 补过历史之后它跟 anchor 已经不是一个坐标系了。
+           老存档没有 epoch, 那时退回 idx。 */
+        this._resumeEpoch = (typeof sp.epoch === 'number' && isFinite(sp.epoch)) ? sp.epoch : null;
         document.getElementById('modalSession').value = sp.session || 'rth';
         document.getElementById('modalTf').value = sp.tf;
       }
@@ -821,13 +833,28 @@ const App = {
     ChartMgr.setMarkers([]);
     await this.loadAndBuild(true);
     // 继续上次: 窗口建好后 seek 回上次看到的那一根
-    if (this._resumeIdx != null && this.engine) {
-      this.engine.seek(Math.min(this._resumeIdx, this.bars.length - 1));
+    if ((this._resumeEpoch != null || this._resumeIdx != null) && this.engine) {
+      /* 优先按时间找最近的一根。存档里的 idx 是**旧 bars 数组**的下标 —— 用户往左拖看过历史
+         的话, 那数组前面已经补进过好几段 (每段 400 根), 而重建出来的窗口没有它们,
+         直接拿 idx 去 seek 就会整块往前跳 (2026-10-29 实测跳了 1602 根 ≈ 19 个交易日)。
+         epoch 是绝对时间, 补不补历史都一样。 */
+      let target = null;
+      if (this._resumeEpoch != null) {
+        let bi = -1, bd = Infinity;
+        for (let i = 0; i < this.bars.length; i++) {
+          const d = Math.abs(this.bars[i].epoch - this._resumeEpoch);
+          if (d < bd) { bd = d; bi = i; }
+        }
+        if (bi >= 0) target = bi;
+      }
+      if (target == null) target = Math.min(this._resumeIdx, this.bars.length - 1);
+      this.engine.seek(target);
       // seek 只重设数据, 视窗仍是 loadAndBuild 里 fit:'recent' 算的那一版 ——
       // 数据长度变了而视窗没跟着走, K 线就会整块挤到右边(用户 2026-10-23 报)。
       // 这里按当前末端重算一次, 让"看到的那一根"落在横向 2/3 处, 跟正常开始一致。
       ChartMgr.fitRecent();
       this._resumeIdx = null;
+      this._resumeEpoch = null;
     }
     this.savePos();
   },

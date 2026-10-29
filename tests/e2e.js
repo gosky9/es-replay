@@ -3729,6 +3729,61 @@ const giveSetup = (page, id = 'feel', cycle = 'range') => page.evaluate(([i, c])
         slCur.scan && slCur.scan.n === 301 && slCur.scan.错侧 === 0,
         JSON.stringify(slCur.scan));
 
+  /* ---- v1.2.23: 「继续上次」要回到**那一根**, 不是**那个下标** ----
+     用户 2026-10-29: 刷新后点「继续上次」, 本该在 2024-02-15 却跳到了 03-15。
+     原因: savePos 只存了 bars 数组下标 idx, 而 loadMoreHistory() 往左补历史时
+     每补一段 (400 根) 就把 engine.idx 整体 +400, targetEpoch 却没跟着变 ——
+     两个字段不在同一个坐标系里。实测那一次 idx 虚高 1602 根 ≈ 19 个交易日。
+     现在存档多存一个 epoch, 恢复时按时间找最近一根, idx 只当老存档的兜底。 */
+  const resumeByEpoch = await page.evaluate(async () => {
+    if (Trading.pos !== 0) App.closePosition();
+    Trading.reset(); Trading.stops = []; ChartMgr.setMarkers([]);
+
+    const cur = App.engine.current;
+    const i0 = App.engine.idx;
+    const fakeIdx = Math.min(i0 + 1602, App.bars.length - 1);   // 模拟"往左拖了 4 段历史"
+    const driftBar = App.bars[fakeIdx];
+    const mk = extra => Object.assign({
+      tf: App.tf, session: App.session, anchor: App.targetEpoch,
+      idx: fakeIdx, time: etTimeStr(cur.epoch, cur.off).replace(' ET', ''),
+    }, extra);
+
+    // ① 新存档: 带 epoch → 必须回到原来那一根
+    localStorage.setItem(App.POS_KEY, JSON.stringify(mk({ epoch: cur.epoch })));
+    App.mode = 'resume';
+    await App.startSession();
+    const got = App.engine.current;
+    const round1 = {
+      存档时间: etTimeStr(cur.epoch, cur.off).replace(' ET', ''),
+      存档下标的另一根: driftBar ? etTimeStr(driftBar.epoch, driftBar.off).replace(' ET', '') : null,
+      恢复后: etTimeStr(got.epoch, got.off).replace(' ET', ''),
+      恢复后idx: App.engine.idx,
+    };
+
+    // ② 老存档 (没有 epoch) → 退回 idx, 也就是修复前的行为, 留着钉住兼容分支
+    const cur2 = App.engine.current;
+    localStorage.setItem(App.POS_KEY, JSON.stringify(mk({
+      idx: Math.min(App.engine.idx + 1602, App.bars.length - 1),
+      time: etTimeStr(cur2.epoch, cur2.off).replace(' ET', ''),
+    })));
+    App.mode = 'resume';
+    await App.startSession();
+    const round2 = {
+      存档时间: etTimeStr(cur2.epoch, cur2.off).replace(' ET', ''),
+      恢复后: etTimeStr(App.engine.current.epoch, App.engine.current.off).replace(' ET', ''),
+    };
+
+    Trading.reset(); Trading.stops = []; ChartMgr.setMarkers([]);
+    return { round1, round2 };
+  });
+  check('「继续上次」按时间回位: 补过历史(下标虚高 1602 根)也照样回到原来那一根',
+        resumeByEpoch.round1.恢复后 === resumeByEpoch.round1.存档时间
+        && resumeByEpoch.round1.恢复后 !== resumeByEpoch.round1.存档下标的另一根,
+        JSON.stringify(resumeByEpoch.round1));
+  check('老存档没有 epoch 时退回 idx (兼容分支: 会落在虚高的那个下标上)',
+        resumeByEpoch.round2.恢复后 !== resumeByEpoch.round2.存档时间,
+        JSON.stringify(resumeByEpoch.round2));
+
   /* 这一段会真的往账本里记一笔 → 单独再还原一次, 别把测试单留在用户的账本里 */
   await restoreJournal(journalBackup);
 
